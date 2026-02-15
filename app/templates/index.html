@@ -1,0 +1,61 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<h1>Dashboard</h1>
+
+<section class="card">
+  <h2>Connected accounts</h2>
+  {% if accounts %}
+    <ul>
+      {% for a in accounts %}
+        <li><b>{{ a.provider }}</b> — provider_user_id={{ a.provider_user_id }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No accounts linked.</p>
+  {% endif %}
+
+  <div class="row gap">
+    <a class="btn" href="/connect/spotify">Connect Spotify</a>
+    <a class="btn" href="/connect/youtube">Connect YouTube</a>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Ingestion</h2>
+  <p class="muted">Prototype supports Spotify “top tracks” ingestion.</p>
+  <div class="row gap">
+    <button class="btn" onclick="apiIngest('spotify')">Ingest Spotify top tracks</button>
+    <button class="btn" onclick="apiIngest('youtube')">Ingest YouTube Liked Videos</button>
+    <button class="btn" onclick="apiProfileRebuild()">Rebuild profile</button>
+  </div>
+  <pre id="homeLog" class="log"></pre>
+</section>
+
+<section class="card">
+  <h2>Latest profile</h2>
+  {% if latest_profile %}
+    <div class="muted">Profile v{{ latest_profile.version }} (tracks={{ latest_profile.built_from_track_count }})</div>
+    <pre class="log">{{ latest_profile.profile_json | tojson(indent=2) }}</pre>
+  {% else %}
+    <p class="muted">No profile yet. Rebuild after ingest.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Recent generations</h2>
+  {% if recent_generations %}
+    <ul>
+      {% for g in recent_generations %}
+        <li>
+          <a href="/dev/generation/{{ g.id }}">Generation #{{ g.id }}</a>
+          — mood={{ g.mood }} — status={{ g.status }}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No generations yet.</p>
+  {% endif %}
+</section>
+
+{% endblock %}

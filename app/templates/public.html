@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>drVibey</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='public.css') }}?v={{ cache_bust }}">
+</head>
+
+<body
+  data-user-id="{{ user_id }}"
+>
+  <!-- Rainbow aurora background -->
+  <div id="bgRainbow" class="bg-rainbow-container"></div>
+  <script>
+    (function(){
+      var c=[
+        'rgb(232,121,249)',
+        'rgb(96,165,250)',
+        'rgb(94,234,212)'
+      ];
+      var o=[[0,1,2],[0,2,1],[2,0,1],[2,1,0],[1,2,0],[1,0,2]];
+      var p=document.getElementById('bgRainbow');
+      for(var i=1;i<=25;i++){
+        var d=document.createElement('div');
+        d.className='rainbow';
+        var r=o[Math.floor(Math.random()*6)];
+        d.style.setProperty('--i',i);
+        d.style.setProperty('--c1',c[r[0]]);
+        d.style.setProperty('--c2',c[r[1]]);
+        d.style.setProperty('--c3',c[r[2]]);
+        p.appendChild(d);
+      }
+      var h=document.createElement('div');h.className='bg-fog-h';p.appendChild(h);
+      var v=document.createElement('div');v.className='bg-fog-v';p.appendChild(v);
+    })();
+  </script>
+
+  <div class="phone">
+    <header class="brand">
+      <!-- Logo (left side) -->
+      <button id="headerLogoBtn" class="header-logo-btn" type="button" aria-label="Home">
+        <img src="{{ url_for('static', filename='logo.png') }}?v={{ cache_bust }}" alt="drVibey" class="header-logo-img" />
+      </button>
+      <div class="brand-center">
+        <div class="brand-title">drVibey</div>
+        <div class="brand-subtitle">Music heals.</div>
+      </div>
+      <!-- User menu / profile button (always visible) -->
+      <button id="headerUserBtn" class="header-user-btn" type="button">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
+          <circle cx="12" cy="7" r="4"/>
+        </svg>
+      </button>
+    </header>
+
+    <!-- SIDE MENU BACKDROP -->
+    <div id="sideMenuBackdrop" class="side-menu-backdrop"></div>
+
+    <!-- SIDE MENU (slides in from right) -->
+    <nav id="dropdownMenu" class="side-menu">
+      <button id="sideMenuClose" class="side-menu-close" type="button" aria-label="Close menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+      <div class="side-menu-items">
+        <button class="side-menu-item" data-action="my-vibe" type="button">My Vibe</button>
+        <button class="side-menu-item" data-action="new-session" type="button">New Session</button>
+        <button class="side-menu-item" data-action="generate" type="button">Generate</button>
+        <button class="side-menu-item" data-action="home" type="button">Recent</button>
+        <button class="side-menu-item" data-action="favourites" type="button">Favourites</button>
+      </div>
+      <div class="side-menu-footer">
+        <button class="side-menu-item side-menu-logout" data-action="logout" type="button">Log Out</button>
+        <div class="side-menu-contact">pr.ae@outlook.com</div>
+      </div>
+    </nav>
+
+    <!-- LOADING OVERLAY -->
+    <div id="loadingOverlay" class="loading-overlay is-hidden" aria-hidden="true">
+      <div class="spinner" aria-label="Loading"></div>
+      <div id="loadingText" class="loading-text">Loading&hellip;</div>
+    </div>
+
+    <!-- SCREEN: LOGIN -->
+    <section id="screenLogin" class="screen is-hidden">
+      <div class="login-card">
+        <div class="login-title">Welcome to drVibey</div>
+        <div class="login-subtitle">Sign in to save your profile and generate personal music</div>
+
+        <button id="loginGoogle" class="signup-btn signup-google" type="button">
+          <span class="signup-icon">G</span>
+          Continue with Google
+        </button>
+
+        <div class="login-divider"><span>or</span></div>
+
+        <form id="emailAuthForm" class="email-auth-form" autocomplete="on">
+          <input id="emailInput" type="email" class="email-auth-input" placeholder="Email address" required autocomplete="email" />
+          <div id="emailAuthError" class="email-auth-error is-hidden"></div>
+          <div id="emailAuthSuccess" class="email-auth-success is-hidden"></div>
+          <button id="emailSendLinkBtn" class="signup-btn signup-email" type="submit">
+            <span class="signup-icon">@</span>
+            Send me a sign-in link
+          </button>
+        </form>
+      </div>
+      <button id="loginSkip" class="skip-btn" type="button">Continue without signing in</button>
+    </section>
+
+    <!-- SCREEN: HOME (Recent Generations) -->
+    <section id="screenHome" class="screen is-hidden">
+      <div class="home-header">Recent Generations</div>
+      <div id="genList" class="gen-list">
+        <!-- Rendered by JS -->
+      </div>
+      <div id="genEmpty" class="gen-empty is-hidden">
+        No generations yet. Start a drVibey session to create your first track.
+      </div>
+    </section>
+
+    <!-- SCREEN: FAVOURITES -->
+    <section id="screenFavourites" class="screen is-hidden">
+      <div class="home-header">Favourites</div>
+      <div id="favList" class="gen-list">
+        <!-- Rendered by JS -->
+      </div>
+      <div id="favEmpty" class="gen-empty is-hidden">
+        No favourites yet. Tap the heart on a song to add it.
+      </div>
+    </section>
+
+    <!-- SCREEN 1: CHAT -->
+    <section id="screenChat" class="screen is-hidden">
+      <div id="chatMessages" class="chat-messages">
+        <!-- Chat bubbles rendered by JS -->
+      </div>
+
+      <!-- Text input area (hidden during screenshot turn) -->
+      <div id="chatInputWrap" class="chat-input-wrap is-hidden">
+        <textarea
+          id="chatInput"
+          class="chat-input"
+          placeholder="Type your answer..."
+          rows="2"
+          maxlength="500"
+        ></textarea>
+        <button id="chatSendBtn" class="chat-send-btn" type="button" aria-label="Send">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 2L11 13"/>
+            <path d="M22 2L15 22L11 13L2 9L22 2Z"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Skip link (shown for skippable questions) -->
+      <div id="skipWrap" class="skip-wrap is-hidden">
+        <button id="skipBtn" class="chat-skip-btn" type="button">Skip</button>
+      </div>
+
+      <!-- Image upload area (hidden until screenshot question) -->
+      <div id="imageUploadWrap" class="image-upload-wrap is-hidden">
+        <div id="dropZone" class="drop-zone">
+          <div class="drop-zone-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <div class="drop-zone-text">Drop screenshots here or tap to browse</div>
+          <div class="drop-zone-hint">3-10 images (PNG, JPG, WEBP)</div>
+          <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/heic" multiple class="file-input-hidden" />
+        </div>
+        <div id="imagePreviewRow" class="image-preview-row"></div>
+        <div id="imageCount" class="image-count is-hidden">0 / 10 screenshots</div>
+        <button id="imageSubmitBtn" class="primary-btn is-hidden" type="button">Analyze my music</button>
+      </div>
+
+      <!-- Chip select area for Q2 (hidden until chip_select question) -->
+      <div id="chipSelectWrap" class="chip-select-wrap is-hidden">
+        <div class="chip-section">
+          <div class="chip-section-label">Artists</div>
+          <div id="chipArtists" class="chip-grid"></div>
+        </div>
+        <div class="chip-section">
+          <div class="chip-section-label">Songs</div>
+          <div id="chipSongs" class="chip-grid"></div>
+        </div>
+        <div id="chipCount" class="chip-count">0/3 artists, 0/3 songs</div>
+        <button id="chipSubmitBtn" class="primary-btn" type="button" disabled>Confirm picks</button>
+      </div>
+
+      <!-- Button select area for Q9 (hidden until buttons question) -->
+      <div id="buttonSelectWrap" class="button-select-wrap is-hidden">
+        <div id="buttonOptions" class="button-options"></div>
+      </div>
+    </section>
+
+    <!-- SCREEN 1.5: PROFILE / VIBE DIAGNOSIS -->
+    <section id="screenProfile" class="screen is-hidden">
+      <div class="card diagnosis-card">
+        <div class="diagnosis-header">Your Vibe Diagnosis</div>
+        <div id="diagArchetype" class="diagnosis-archetype"></div>
+        <div id="diagText" class="diagnosis-text"></div>
+
+        <div class="diagnosis-dimensions" id="diagDimensions">
+          <!-- dimension bars rendered by JS -->
+        </div>
+
+        <div id="diagGenres" class="diagnosis-genres"></div>
+        <div id="diagArtists" class="diagnosis-artists"></div>
+      </div>
+
+      <!-- Signup CTA (shown only if NOT already authenticated) -->
+      <div id="profileCta" class="profile-cta">
+        <div class="profile-cta-text">Save your profile and generate your personal song?</div>
+
+        <button id="signupGoogle" class="signup-btn signup-google" type="button">
+          <span class="signup-icon">G</span>
+          Continue with Google
+        </button>
+        <button id="signupEmail" class="signup-btn signup-email" type="button">
+          <span class="signup-icon">@</span>
+          Continue with Email
+        </button>
+
+        <button id="skipSignup" class="skip-btn" type="button">Skip for now</button>
+      </div>
+
+      <!-- Proceed button (shown if already authenticated) -->
+      <button id="profileProceedBtn" class="primary-btn is-hidden" type="button">Generate your song</button>
+    </section>
+
+    <!-- SCREEN 2: MOOD + INTENSITY -->
+    <section id="screenMood" class="screen is-hidden">
+      <div class="status-line">Profile ready!</div>
+
+      <div class="card mood-card">
+        <div class="card-title">How are you feeling right now?</div>
+
+        <!-- Radial menu for moods -->
+        <nav class="menu" id="moodMenu">
+          <input type="checkbox" href="#" class="menu-open" name="menu-open" id="menu-open" />
+          <label class="menu-open-button" for="menu-open">
+            <span class="lines line-1"></span>
+            <span class="lines line-2"></span>
+            <span class="lines line-3"></span>
+            <span class="menu-open-text">MOOD</span>
+          </label>
+
+          {% for item in mood_items %}
+            <a href="#" class="menu-item {{ item.cls }}" data-mood="{{ item.id }}" data-label="{{ item.label }}" title="{{ item.hint }}">
+              <span class="emoji">{{ item.emoji }}</span>
+            </a>
+          {% endfor %}
+        </nav>
+
+        <div id="selectedMoodRow" class="selected-mood-row">
+          <div class="selected-mood-label">Selected mood:</div>
+          <div id="selectedMoodValue" class="selected-mood-value">None</div>
+        </div>
+
+        <!-- Intensity slider -->
+        <div class="intensity-row">
+          <label class="intensity-label" for="intensitySlider">Intensity</label>
+          <div class="slider-wrap">
+            <span class="slider-end-label">Subtle</span>
+            <input id="intensitySlider" type="range" min="0" max="100" value="50" class="intensity-slider" />
+            <span class="slider-end-label">Intense</span>
+          </div>
+        </div>
+      </div>
+
+      <button id="moodNextBtn" class="primary-btn" type="button">NEXT &gt;</button>
+      <div id="moodError" class="error is-hidden">Pick a mood first.</div>
+    </section>
+
+    <!-- SCREEN 3: ACTIVITY + VOCAL TOGGLE -->
+    <section id="screenActivity" class="screen is-hidden">
+      <div class="status-line">Mood selected!</div>
+
+      <div class="card activity-card">
+        <div class="card-title" style="margin-bottom: 40px !important">What are you doing?</div>
+
+        <!-- Radial menu for activities -->
+        <nav class="menu" id="activityMenu">
+          <input type="checkbox" href="#" class="menu-open" name="activity-menu-open" id="activity-menu-open" />
+          <label class="menu-open-button" for="activity-menu-open">
+            <span class="lines line-1"></span>
+            <span class="lines line-2"></span>
+            <span class="lines line-3"></span>
+            <span class="menu-open-text">ACT</span>
+          </label>
+
+          {% for item in activity_items %}
+            <a href="#" class="menu-item activity-menu-item {{ item.cls }}" data-activity="{{ item.id }}" data-label="{{ item.label }}" title="{{ item.hint }}">
+              <span class="emoji">{{ item.emoji }}</span>
+            </a>
+          {% endfor %}
+        </nav>
+
+        <div id="selectedActivityRow" class="selected-mood-row">
+          <div class="selected-mood-label">Selected activity:</div>
+          <div id="selectedActivityValue" class="selected-mood-value">None</div>
+        </div>
+
+        <!-- Instrumental / Vocal toggle -->
+        <div class="vocal-toggle-row">
+          <button id="toggleInstrumental" class="toggle-btn is-active" type="button">Instrumental</button>
+          <button id="toggleVocal" class="toggle-btn" type="button">Vocal</button>
+        </div>
+      </div>
+
+      <button id="activityNextBtn" class="primary-btn" type="button">NEXT &gt;</button>
+      <div id="activityError" class="error is-hidden">Pick an activity first.</div>
+    </section>
+
+    <!-- SCREEN 4: EXTRAS (OPTIONAL) -->
+    <section id="screenExtras" class="screen is-hidden">
+      <div class="status-line">Almost there!</div>
+
+      <div class="card extras-card">
+        <div class="card-title">Fine-tune (optional)</div>
+
+        <div class="extras-field">
+          <label class="extras-label" for="songRefInput">Song reference</label>
+          <input id="songRefInput" type="text" class="extras-input" placeholder="e.g. Blinding Lights" autocomplete="off" />
+        </div>
+
+        <div class="extras-field">
+          <label class="extras-label" for="genreSelect">Genre</label>
+          <select id="genreSelect" class="extras-select">
+            <option value="">-- none --</option>
+            {% for g in genre_list %}
+              <option value="{{ g }}">{{ g }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="extras-field">
+          <label class="extras-label" for="bpmSlider">BPM <span id="bpmValue" class="bpm-value-display">--</span></label>
+          <div class="slider-wrap">
+            <span class="slider-end-label">60</span>
+            <input id="bpmSlider" type="range" min="60" max="200" step="5" value="0" class="extras-slider" />
+            <span class="slider-end-label">200</span>
+          </div>
+        </div>
+      </div>
+
+      <button id="extrasNextBtn" class="primary-btn" type="button">SKIP &gt;</button>
+
+      <div class="micro-note">
+        You can skip this step or add details to guide the generation.
+      </div>
+    </section>
+
+    <!-- SCREEN 5: RESULT -->
+    <section id="screenResult" class="screen is-hidden">
+      <div class="card result-card">
+        <div class="cover-wrap">
+          <img id="coverImg" class="cover-img" alt="Cover image from Suno"
+               src="data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D'http%3A//www.w3.org/2000/svg'%20width%3D'600'%20height%3D'600'%3E%3Crect%20width%3D'100%25'%20height%3D'100%25'%20fill%3D'%23efefef'/%3E%3Ctext%20x%3D'50%25'%20y%3D'50%25'%20dominant-baseline%3D'middle'%20text-anchor%3D'middle'%20fill%3D'%23666'%20font-size%3D'22'%20font-family%3D'Arial'%3ECOVER%20IMAGE%20FROM%20SUNO%3C/text%3E%3C/svg%3E" />
+        </div>
+
+        <div class="result-title">YOUR SONG</div>
+        <div id="resultMood" class="result-mood">Mood: &mdash;</div>
+
+        <div class="player">
+          <button id="playPauseBtn" class="play-btn" type="button" aria-label="Play/Pause">&#x25B6;</button>
+
+          <div class="timeline">
+            <div class="time-row">
+              <span id="tCur">00:00</span>
+              <input id="seek" type="range" min="0" max="100" value="0" />
+              <span id="tDur">00:00</span>
+            </div>
+          </div>
+
+          <audio id="audioEl" preload="none"></audio>
+        </div>
+
+        <div class="result-actions">
+          <button id="favBtn" class="fav-btn" type="button" aria-label="Add to favourites">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+            </svg>
+          </button>
+          <a id="downloadBtn" class="download-btn is-disabled" href="#" download aria-disabled="true">DOWNLOAD</a>
+        </div>
+
+        <div class="micro-note">
+          Full song download available in 2-3 minutes, but you can listen right now!
+        </div>
+      </div>
+
+      <button id="resultHomeBtn" class="primary-btn" type="button">Back to Home</button>
+    </section>
+  </div>
+
+  <!-- Firebase JS SDK (compat mode) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script>
+    // Initialize Firebase with full project config (passed from server)
+    (function() {
+      var cfg = {{ firebase_config | tojson }};
+      if (cfg && cfg.apiKey && cfg.projectId) {
+        firebase.initializeApp(cfg);
+        console.log("[Firebase] initialized for project:", cfg.projectId);
+      } else {
+        console.warn("[Firebase] config missing — auth will not work", cfg);
+      }
+    })();
+  </script>
+  <script src="{{ url_for('static', filename='public.js') }}?v={{ cache_bust }}"></script>
+</body>
+</html>

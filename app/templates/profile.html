@@ -1,0 +1,21 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<h1>Listener profile</h1>
+
+{% if profile %}
+  <section class="card">
+    <h2>Profile summary</h2>
+    <div class="muted">v{{ profile.version }} — built_from_track_count={{ profile.built_from_track_count }}</div>
+    <pre class="log">{{ profile.profile_json | tojson(indent=2) }}</pre>
+  </section>
+
+  <section class="card">
+    <h2>Explainability (“why this style”)</h2>
+    <pre class="log">{{ profile.explain_json | tojson(indent=2) }}</pre>
+  </section>
+{% else %}
+  <p class="muted">No profile available. Go to Home and rebuild.</p>
+{% endif %}
+
+{% endblock %}

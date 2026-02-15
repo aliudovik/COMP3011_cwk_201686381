@@ -1,0 +1,40 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<h1>Generate a song</h1>
+
+{% if not profile %}
+  <p class="muted">No profile found. Ingest + rebuild first.</p>
+{% else %}
+  <section class="card">
+    <h2>Pick a mood</h2>
+    <div class="grid">
+      {% for m in moods %}
+        <label class="mood">
+          <input type="radio" name="mood" value="{{ m.id }}" {% if loop.first %}checked{% endif %}/>
+          <div><b>{{ m.label }}</b></div>
+          <div class="muted">{{ m.hint }}</div>
+        </label>
+      {% endfor %}
+    </div>
+
+    <h3>Options</h3>
+    <div class="row gap">
+      <label><input type="checkbox" id="instrumental" checked /> Instrumental</label>
+      <label><input type="checkbox" id="customMode" checked /> Suno customMode</label>
+    </div>
+
+    <div class="row gap">
+      <input id="titleHint" class="input" placeholder="Title hint (optional)" />
+      <input id="styleHint" class="input" placeholder="Style hint (optional)" />
+    </div>
+
+    <div class="row gap">
+      <button class="btn" onclick="apiGenerate()">Generate</button>
+    </div>
+
+    <pre id="genLog" class="log"></pre>
+  </section>
+{% endif %}
+
+{% endblock %}

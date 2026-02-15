@@ -1,0 +1,34 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<h1>Generation #{{ gen.id }}</h1>
+
+<section class="card">
+  <div class="row gap">
+    <div><b>Status:</b> <span id="status">{{ gen.status }}</span></div>
+    <div><b>Mood:</b> {{ gen.mood }}</div>
+  </div>
+
+  <button class="btn" onclick="pollGeneration({{ gen.id }})">Refresh</button>
+
+  <h3>OpenAI prompt (stored)</h3>
+  <pre id="openai" class="log">{{ gen.openai_prompt | tojson(indent=2) }}</pre>
+
+  <h3>Suno request (stored)</h3>
+  <pre id="sunoReq" class="log">{{ gen.suno_request | tojson(indent=2) }}</pre>
+
+  <h3>Suno result</h3>
+  <pre id="result" class="log">{{ gen.result_json | tojson(indent=2) }}</pre>
+
+  {% if gen.error %}
+    <h3>Error</h3>
+    <pre class="log">{{ gen.error }}</pre>
+  {% endif %}
+</section>
+
+<script>
+  // auto-refresh once
+  pollGeneration({{ gen.id }});
+</script>
+
+{% endblock %}

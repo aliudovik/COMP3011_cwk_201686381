@@ -1,0 +1,68 @@
+services:
+  # --- Infrastructure ---
+  db:
+    image: postgres:16
+    container_name: drvibey-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: drvibey
+      POSTGRES_PASSWORD: drvibey_pw
+      POSTGRES_DB: drvibey
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Healthcheck ensures DB is ready before App starts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drvibey -d drvibey"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    restart: always
+    ports:
+      - "6379:6379"
+
+  # --- Your Application ---
+  web:
+    build: .
+    container_name: drvibey-web
+    restart: always  # <--- Keeps it online!
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy # Waits for DB healthcheck
+      redis:
+        condition: service_started
+    ports:
+      - "7777:7777"
+    command: ["python", "run.py", "--init-db"]
+
+  worker:
+    build: .
+    container_name: drvibey-worker
+    restart: always  # <--- Keeps it online!
+    env_file:
+      - .env
+    environment:
+      - OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: ["python", "worker.py"]
+
+  # --- Connectivity (Cloudflare) ---
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN} # Put TUNNEL_TOKEN in your .env file!
+
+volumes:
+  pgdata:

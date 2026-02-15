@@ -1,0 +1,1789 @@
+/* ---------- Base layout ---------- */
+* { box-sizing: border-box; }
+
+body {
+  padding: 0;
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: #ffffff;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color: #111;
+  overflow: hidden;
+  touch-action: manipulation;
+}
+
+a { text-decoration: none; color: inherit; }
+
+.phone {
+  width: 360px;
+  height: 720px;
+  border-radius: 44px;
+  padding: 20px 18px;
+  position: relative;
+  z-index: 1;
+  background: #ffffff47;
+  overflow: hidden;
+
+  /* Smoothly fade edges to full transparency */
+  -webkit-mask-image:
+    linear-gradient(to right,  transparent, black 28px, black calc(100% - 28px), transparent),
+    linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right,  transparent, black 28px, black calc(100% - 28px), transparent),
+    linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
+  mask-composite: intersect;
+}
+
+
+/* ==========================================================
+   Rainbow Aurora Background
+   ========================================================== */
+
+.bg-rainbow-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.rainbow {
+  height: 100vh;
+  width: 0;
+  top: 0;
+  position: absolute;
+  transform: rotate(10deg);
+  transform-origin: top right;
+  animation: rainbow-slide linear infinite;
+  animation-duration: calc(45s - var(--i) * 0.9s);
+  animation-delay: calc(var(--i) * -1.8s);
+  box-shadow:
+    -130px 0 80px 40px white,
+    -50px 0 50px 25px var(--c1),
+    0 0 50px 25px var(--c2),
+    50px 0 50px 25px var(--c3),
+    130px 0 80px 40px white;
+}
+
+@keyframes rainbow-slide {
+  from { right: -25vw; }
+  to   { right: 125vw; }
+}
+
+.bg-fog-h {
+  box-shadow: 0 0 50vh 40vh white;
+  width: 100vw;
+  height: 0;
+  bottom: 0;
+  left: 0;
+  position: absolute;
+}
+
+.bg-fog-v {
+  box-shadow: 0 0 35vw 25vw white;
+  width: 0;
+  height: 100vh;
+  bottom: 0;
+  left: 0;
+  position: absolute;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 6px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #111;
+  position: relative;
+}
+
+.header-logo-btn {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  line-height: 0;
+  border-radius: 8px;
+  transition: opacity 0.15s;
+}
+
+.header-logo-btn:hover {
+  opacity: 0.7;
+}
+
+.header-logo-img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
+.brand-center {
+  text-align: center;
+  flex: 1;
+}
+
+.brand-title {
+  font-weight: 900;
+  letter-spacing: 1px;
+  font-size: 34px;
+}
+
+.brand-subtitle {
+  margin-top: 8px;
+  line-height: 1.25;
+}
+
+.screen {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 130px;
+  bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.is-hidden { display: none !important; }
+
+.card {
+  border: 2px solid #111;
+  border-radius: 26px;
+  padding: 18px;
+  background: #ffffff75;
+}
+
+.card-title {
+  font-size: 22px;
+  font-weight: 900;
+  margin-bottom: 30px;
+}
+
+.primary-btn {
+  border: 2px solid #111;
+  border-radius: 18px;
+  height: 50px;
+  font-weight: 900;
+  background: #fff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.primary-btn:hover { background: #f6f6f6; }
+
+.micro-note {
+  font-size: 11px;
+  opacity: 0.75;
+  line-height: 1.35;
+}
+
+/* ---------- Connect options ---------- */
+.service-option {
+  width: 100%;
+  border: 2px solid #111;
+  border-radius: 18px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 900;
+  margin-top: 10px;
+}
+
+.service-option.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.service-tick {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #111;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.service-circle {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #111;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+/* ---------- Loading overlay ---------- */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 44px;
+  background: rgba(255,255,255,0.85);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+  gap: 14px;
+  padding-top: 140px;
+}
+
+.spinner {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 4px solid #ddd;
+  border-top-color: #111;
+  animation: spin 0.9s linear infinite;
+}
+
+.loading-text {
+  font-weight: 900;
+  text-align: center;
+  font-size: 20px;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- Mood / Activity / status small bits ---------- */
+.status-line {
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+  opacity: 0.8;
+}
+
+.mood-card,
+.activity-card {
+  display: grid;
+  gap: 30px;
+  justify-items: center;
+}
+
+.selected-mood-row {
+  margin-top: 95px;
+  text-align: center;
+  font-weight: 900;
+}
+
+.selected-mood-label {
+  font-size: 7px;
+  opacity: 0;
+}
+
+.selected-mood-value {
+  font-size: 20px;
+  opacity: 0.9;
+  font-variant: all-small-caps;
+  margin-top: 10px;
+}
+
+.error {
+  color: #b00020;
+  font-weight: 900;
+  text-align: center;
+  font-size: 12px;
+}
+
+/* ---------- Intensity slider ---------- */
+.intensity-row {
+  width: 100%;
+  text-align: center;
+}
+
+.intensity-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 900;
+  opacity: 0.75;
+  margin-bottom: 6px;
+}
+
+.slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.slider-end-label {
+  font-size: 10px;
+  font-weight: 900;
+  opacity: 0.6;
+  white-space: nowrap;
+  min-width: 40px;
+}
+
+.intensity-slider,
+.extras-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #ddd;
+  outline: none;
+}
+
+.intensity-slider::-webkit-slider-thumb,
+.extras-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #111;
+  cursor: pointer;
+  border: 2px solid #111;
+}
+
+.intensity-slider::-moz-range-thumb,
+.extras-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #111;
+  cursor: pointer;
+  border: 2px solid #111;
+}
+
+/* ---------- Vocal / Instrumental toggle ---------- */
+.vocal-toggle-row {
+  display: flex;
+  gap: 0;
+  width: 100%;
+  border: 2px solid #111;
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.toggle-btn {
+  flex: 1;
+  border: none;
+  padding: 10px 0;
+  font-weight: 900;
+  font-size: 13px;
+  cursor: pointer;
+  background: #fff;
+  color: #111;
+  transition: background 0.2s, color 0.2s;
+}
+
+.toggle-btn + .toggle-btn {
+  border-left: 2px solid #111;
+}
+
+.toggle-btn.is-active {
+  background: #111;
+  color: #fff;
+}
+
+/* ---------- Extras screen ---------- */
+.extras-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.extras-card .card-title {
+  margin-bottom: 4px;
+}
+
+.extras-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.extras-label {
+  font-size: 12px;
+  font-weight: 900;
+  opacity: 0.75;
+}
+
+.extras-input,
+.extras-select {
+  width: 100%;
+  border: 2px solid #111;
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-weight: 700;
+  font-size: 13px;
+  font-family: inherit;
+  color: #111;
+  background: #fff;
+  outline: none;
+}
+
+.extras-input:focus,
+.extras-select:focus {
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.15);
+}
+
+.extras-input::placeholder {
+  color: #999;
+  font-weight: 600;
+}
+
+.bpm-value-display {
+  font-size: 12px;
+  font-weight: 900;
+  color: #111;
+}
+
+/* ---------- Result screen ---------- */
+.result-card {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+}
+
+.cover-wrap {
+  width: 210px;
+  height: 210px;
+  border: 2px solid #111;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.result-title {
+  font-weight: 900;
+  letter-spacing: 1px;
+}
+
+.result-mood {
+  font-size: 12px;
+  font-weight: 900;
+  opacity: 0.75;
+}
+
+.player {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.play-btn {
+  width: 46px;
+  height: 46px;
+  border-radius: 16px;
+  border: 2px solid #111;
+  background: #fff;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.timeline {
+  width: 100%;
+}
+
+.time-row {
+  display: grid;
+  grid-template-columns: 42px 1fr 42px;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+#seek {
+  width: 100%;
+}
+
+.download-btn {
+  width: 100%;
+  border: 2px solid #111;
+  border-radius: 18px;
+  height: 46px;
+  font-weight: 900;
+  display: grid;
+  place-items: center;
+  background: #fff;
+}
+
+.download-btn:hover { background: #f6f6f6; }
+
+.download-btn.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ---------- Result actions row (heart + download) ---------- */
+
+.result-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.result-actions .download-btn {
+  flex: 1;
+  min-width: 0;
+}
+
+.fav-btn {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  border-radius: 16px;
+  border: 2px solid #111;
+  background: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #111;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, transform 0.2s;
+}
+
+.fav-btn:hover {
+  background: #f6f6f6;
+}
+
+.fav-btn:active {
+  transform: scale(0.9);
+}
+
+.fav-btn svg {
+  transition: fill 0.25s, stroke 0.25s;
+}
+
+.fav-btn.is-favourited svg {
+  fill: #e74c3c;
+  stroke: #e74c3c;
+}
+
+/* ---------- Favourite heart indicator on gen list items ---------- */
+
+.gen-fav-heart {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: #e74c3c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gen-fav-heart svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ==========================================================
+   Radial menu CSS (shared by mood and activity menus)
+   ========================================================== */
+
+.menu-item,
+.menu-open-button {
+   display: grid;
+   place-items: center;
+   width: 70px;
+   height: 70px;
+   border-radius: 100%;
+   position: absolute;
+   color: #ffffff;
+   transition: transform ease-out 200ms;
+}
+.menu-open {
+   display: none;
+}
+
+.lines {
+   display: block;
+   position: absolute;
+   top: 50%;
+   left: 50%;
+   margin-left: -17px;
+   margin-top: -1px;
+   width: 35px;
+   height: 4px;
+   background: #0000cc;
+   border-radius: 1em;
+   transition: transform 200ms;
+}
+.line-1 {
+   transform: translate3d(0, -9px, 0);
+}
+.line-2 {
+   transform: translate3d(0, 0, 0);
+}
+.line-3 {
+   transform: translate3d(0, 9px, 0);
+}
+
+.menu-open:checked + .menu-open-button .line-1 {
+   transform: translate3d(0, 0, 0) rotate(45deg);
+}
+.menu-open:checked + .menu-open-button .line-2 {
+   transform: translate3d(0, 0, 0) scale(0, 1);
+}
+.menu-open:checked + .menu-open-button .line-3 {
+   transform: translate3d(0, 0, 0) rotate(-45deg);
+}
+
+.menu {
+   width: 70px;
+   height: 50px;
+   font-size: 26px;
+   margin-top: 50px;
+}
+.menu-item:hover {
+   background: cyan;
+}
+.menu-item {
+   transition-duration: 0.2s;
+}
+
+.menu-open-button {
+   background: #ffd700;
+   z-index: 2;
+   transition-timing-function: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+   transition-duration: 0.3s;
+   transform: scale(1.1, 1.1) translate3d(0, 0, 0);
+   cursor: pointer;
+}
+.menu-open-button:hover {
+   transform: scale(1.2, 1.2) translate3d(0, 0, 0);
+}
+
+.menu-open:checked + .menu-open-button {
+   transition-timing-function: linear;
+   transition-duration: 0.2s;
+   transform: scale(1, 1) translate3d(0, 0, 0);
+}
+.menu-open:checked ~ .menu-item {
+   transition-duration: 0.4s;
+   transition-timing-function: cubic-bezier(0.2, 1, 0.2, 1.2);
+}
+
+/* ITEM 1: Top Center (0 degrees) */
+.menu-open:checked ~ .menu-item:nth-child(3) {
+   transition-delay: 0.05s;
+   transform: translate3d(0px, -105px, 0);
+}
+
+/* ITEM 2: Top Right (~51.4 deg) */
+.menu-open:checked ~ .menu-item:nth-child(4) {
+   transition-delay: 0.1s;
+   transform: translate3d(82px, -65px, 0);
+}
+
+/* ITEM 3: Right (~102.8 deg) */
+.menu-open:checked ~ .menu-item:nth-child(5) {
+   transition-delay: 0.15s;
+   transform: translate3d(102px, 23px, 0);
+}
+
+/* ITEM 4: Bottom Right (~154.2 deg) */
+.menu-open:checked ~ .menu-item:nth-child(6) {
+   transition-delay: 0.2s;
+   transform: translate3d(45px, 95px, 0);
+}
+
+/* ITEM 5: Bottom Left (~205.7 deg) */
+.menu-open:checked ~ .menu-item:nth-child(7) {
+   transition-delay: 0.25s;
+   transform: translate3d(-45px, 95px, 0);
+}
+
+/* ITEM 6: Left (~257.1 deg) */
+.menu-open:checked ~ .menu-item:nth-child(8) {
+   transition-delay: 0.3s;
+   transform: translate3d(-102px, 23px, 0);
+}
+
+/* ITEM 7: Top Left (~308.5 deg) */
+.menu-open:checked ~ .menu-item:nth-child(9) {
+   transition-delay: 0.35s;
+   transform: translate3d(-82px, -65px, 0);
+}
+
+.menu-open-button {
+   box-shadow: 3px 3px 10px 0 rgba(178, 34, 34, 0.5);
+   text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.12);
+}
+
+/* Bright pastel colors with neon shadows */
+.red {
+   background: linear-gradient(135deg, #ff6b9d 0%, #ff8fab 100%);
+   box-shadow: 
+     0 0 20px rgba(255, 107, 157, 0.8),
+     0 0 40px rgba(255, 107, 157, 0.5),
+     0 4px 12px rgba(0, 0, 0, 0.2);
+   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+.red:hover {
+   background: linear-gradient(135deg, #ff8fab 0%, #ffa8bd 100%);
+   box-shadow: 
+     0 0 30px rgba(255, 107, 157, 1),
+     0 0 50px rgba(255, 107, 157, 0.7),
+     0 6px 16px rgba(0, 0, 0, 0.25);
+   text-shadow: none;
+}
+
+.orange {
+   background: linear-gradient(135deg, #ffb347 0%, #ffc976 100%);
+   box-shadow: 
+     0 0 20px rgba(255, 179, 71, 0.8),
+     0 0 40px rgba(255, 179, 71, 0.5),
+     0 4px 12px rgba(0, 0, 0, 0.2);
+   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+.orange:hover {
+   background: linear-gradient(135deg, #ffc976 0%, #ffd99a 100%);
+   box-shadow: 
+     0 0 30px rgba(255, 179, 71, 1),
+     0 0 50px rgba(255, 179, 71, 0.7),
+     0 6px 16px rgba(0, 0, 0, 0.25);
+   text-shadow: none;
+}
+
+.gold {
+   background: linear-gradient(135deg, #ffe66d 0%, #fff199 100%);
+   box-shadow: 
+     0 0 20px rgba(255, 230, 109, 0.8),
+     0 0 40px rgba(255, 230, 109, 0.5),
+     0 4px 12px rgba(0, 0, 0, 0.2);
+   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+.gold:hover {
+   background: linear-gradient(135deg, #fff199 0%, #fff7b8 100%);
+   box-shadow: 
+     0 0 30px rgba(255, 230, 109, 1),
+     0 0 50px rgba(255, 230, 109, 0.7),
+     0 6px 16px rgba(0, 0, 0, 0.25);
+   text-shadow: none;
+}
+
+.green {
+   background: linear-gradient(135deg, #77dd77 0%, #99e699 100%);
+   box-shadow: 
+     0 0 20px rgba(119, 221, 119, 0.8),
+     0 0 40px rgba(119, 221, 119, 0.5),
+     0 4px 12px rgba(0, 0, 0, 0.2);
+   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+.green:hover {
+   background: linear-gradient(135deg, #99e699 0%, #b3f0b3 100%);
+   box-shadow: 
+     0 0 30px rgba(119, 221, 119, 1),
+     0 0 50px rgba(119, 221, 119, 0.7),
+     0 6px 16px rgba(0, 0, 0, 0.25);
+   text-shadow: none;
+}
+
+.blue {
+   background: linear-gradient(135deg, #82caff 0%, #a8d8ff 100%);
+   box-shadow: 
+     0 0 20px rgba(130, 202, 255, 0.8),
+     0 0 40px rgba(130, 202, 255, 0.5),
+     0 4px 12px rgba(0, 0, 0, 0.2);
+   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+.blue:hover {
+   background: linear-gradient(135deg, #a8d8ff 0%, #c5e5ff 100%);
+   box-shadow: 
+     0 0 30px rgba(130, 202, 255, 1),
+     0 0 50px rgba(130, 202, 255, 0.7),
+     0 6px 16px rgba(0, 0, 0, 0.25);
+   text-shadow: none;
+}
+
+.indigo {
+   background: linear-gradient(135deg, #b19cd9 0%, #c8b6e8 100%);
+   box-shadow: 
+     0 0 20px rgba(177, 156, 217, 0.8),
+     0 0 40px rgba(177, 156, 217, 0.5),
+     0 4px 12px rgba(0, 0, 0, 0.2);
+   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+.indigo:hover {
+   background: linear-gradient(135deg, #c8b6e8 0%, #dcd0f0 100%);
+   box-shadow: 
+     0 0 30px rgba(177, 156, 217, 1),
+     0 0 50px rgba(177, 156, 217, 0.7),
+     0 6px 16px rgba(0, 0, 0, 0.25);
+   text-shadow: none;
+}
+
+/* 7th item color class */
+.purple {
+  background: linear-gradient(135deg, #dda0dd 0%, #e8b8e8 100%);
+  box-shadow: 
+    0 0 20px rgba(221, 160, 221, 0.8),
+    0 0 40px rgba(221, 160, 221, 0.5),
+    0 4px 12px rgba(0, 0, 0, 0.2);
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+.purple:hover {
+  background: linear-gradient(135deg, #e8b8e8 0%, #f0d0f0 100%);
+  box-shadow: 
+    0 0 30px rgba(221, 160, 221, 1),
+    0 0 50px rgba(221, 160, 221, 0.7),
+    0 6px 16px rgba(0, 0, 0, 0.25);
+  text-shadow: none;
+}
+
+/* Make emojis readable inside circles - 50% larger */
+.emoji {
+  font-size: 36px;
+  line-height: 1;
+}
+
+/* Keep label readable on the center button */
+.menu-open-text {
+  position: absolute;
+  bottom: 7px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-weight: 900;
+  color: #111;
+}
+
+/* Selected item glow - enhanced neon effect */
+.menu-item.is-selected {
+  transform: scale(1.15) !important;
+  z-index: 10;
+  box-shadow:
+      0 0 0 4px #42f5a4,
+      0 0 25px rgba(66, 245, 164, 0.9),
+      0 0 45px rgba(66, 245, 164, 0.6),
+      0 5px 20px rgba(0, 0, 0, 0.3) !important;
+  border-color: transparent;
+}
+
+/* Distributed positions after selection */
+.menu-open:checked ~ .menu-item.dist-pos-0 {
+    transform: translate3d(0px, -105px, 0) !important;
+}
+.menu-open:checked ~ .menu-item.dist-pos-1 {
+    transform: translate3d(91px, -53px, 0) !important;
+}
+.menu-open:checked ~ .menu-item.dist-pos-2 {
+    transform: translate3d(91px, 53px, 0) !important;
+}
+.menu-open:checked ~ .menu-item.dist-pos-3 {
+    transform: translate3d(0px, 105px, 0) !important;
+}
+.menu-open:checked ~ .menu-item.dist-pos-4 {
+    transform: translate3d(-91px, 53px, 0) !important;
+}
+.menu-open:checked ~ .menu-item.dist-pos-5 {
+    transform: translate3d(-91px, -53px, 0) !important;
+}
+
+/* Hide center button after a selection is made */
+.menu.has-selection .menu-open-button {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+
+/* ==========================================================
+   drVibey Chat UI
+   ========================================================== */
+
+/* ── Chat messages container ── */
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: #ccc transparent;
+}
+
+.chat-messages::-webkit-scrollbar {
+  width: 4px;
+}
+.chat-messages::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 2px;
+}
+
+/* ── Chat bubbles ── */
+.chat-bubble {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 18px;
+  font-size: 13px;
+  line-height: 1.45;
+  word-wrap: break-word;
+  animation: bubbleIn 0.25s ease-out;
+}
+
+@keyframes bubbleIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.chat-assistant {
+  align-self: flex-start;
+  background: #f2f2f2;
+  border: 2px solid #e0e0e0;
+  border-bottom-left-radius: 4px;
+  color: #111;
+  font-weight: 600;
+}
+
+.chat-user {
+  align-self: flex-end;
+  background: #111;
+  color: #fff;
+  border-bottom-right-radius: 4px;
+  font-weight: 600;
+}
+
+/* ── Typing indicator ── */
+.chat-typing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 18px;
+  min-height: 40px;
+}
+
+.chat-typing .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #888;
+  animation: typingDot 1.2s ease-in-out infinite;
+}
+
+.chat-typing .dot:nth-child(2) { animation-delay: 0.2s; }
+.chat-typing .dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typingDot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30%           { transform: translateY(-5px); opacity: 1; }
+}
+
+/* ── Chat input ── */
+.chat-input-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+.chat-input {
+  flex: 1;
+  border: 2px solid #111;
+  border-radius: 18px;
+  padding: 10px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111;
+  resize: none;
+  outline: none;
+  min-height: 42px;
+  max-height: 100px;
+  line-height: 1.4;
+}
+
+.chat-input:focus {
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+}
+
+.chat-input::placeholder {
+  color: #999;
+  font-weight: 500;
+}
+
+.chat-send-btn {
+  width: 42px;
+  height: 42px;
+  border: 2px solid #111;
+  border-radius: 50%;
+  background: #111;
+  color: #fff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.chat-send-btn:hover {
+  background: #333;
+}
+
+.chat-send-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+
+/* ==========================================================
+   Screenshot Upload
+   ========================================================== */
+
+.image-upload-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.drop-zone {
+  border: 2px dashed #bbb;
+  border-radius: 18px;
+  padding: 20px 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.drop-zone:hover,
+.drop-zone.drag-over {
+  border-color: #111;
+  background: #fafafa;
+}
+
+.drop-zone-icon {
+  margin-bottom: 6px;
+  color: #999;
+}
+
+.drop-zone-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: #333;
+}
+
+.drop-zone-hint {
+  font-size: 11px;
+  color: #999;
+  margin-top: 4px;
+}
+
+.file-input-hidden {
+  display: none;
+}
+
+.image-preview-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0;
+  scrollbar-width: thin;
+}
+
+.image-thumb {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 2px solid #111;
+  flex-shrink: 0;
+}
+
+.image-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-thumb-remove {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #111;
+  color: #fff;
+  border: none;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.image-count {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.6;
+  text-align: center;
+}
+
+
+/* ==========================================================
+   Vibe Diagnosis / Profile Screen
+   ========================================================== */
+
+.diagnosis-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+}
+
+.diagnosis-header {
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  opacity: 0.5;
+}
+
+.diagnosis-archetype {
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.diagnosis-text {
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+/* ── Dimension bars ── */
+.diagnosis-dimensions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.dimension-row {
+  display: grid;
+  grid-template-columns: 100px 1fr 36px;
+  align-items: center;
+  gap: 8px;
+}
+
+.dimension-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  opacity: 0.7;
+}
+
+.dimension-bar-wrap {
+  height: 8px;
+  background: #eee;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.dimension-bar {
+  height: 100%;
+  background: #111;
+  border-radius: 4px;
+  transition: width 0.6s ease-out;
+}
+
+.dimension-pct {
+  font-size: 11px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.diagnosis-genres,
+.diagnosis-artists {
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.diagnosis-genres strong,
+.diagnosis-artists strong {
+  font-weight: 800;
+}
+
+
+/* ==========================================================
+   Profile CTA / Signup
+   ========================================================== */
+
+.profile-cta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.profile-cta-text {
+  font-size: 14px;
+  font-weight: 800;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.signup-btn {
+  width: 100%;
+  height: 40px;
+  border: 2px solid #111;
+  border-radius: 14px;
+  font-weight: 800;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 0.15s;
+}
+
+.signup-google {
+  background: #fff;
+  color: #111;
+}
+.signup-google:hover {
+  background: #f5f5f5;
+}
+
+.signup-apple {
+  background: #111;
+  color: #fff;
+}
+.signup-apple:hover {
+  background: #333;
+}
+
+.signup-email {
+  background: #fff;
+  color: #111;
+}
+.signup-email:hover {
+  background: #f5f5f5;
+}
+
+.signup-icon {
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.skip-btn {
+  background: none;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #999;
+  cursor: pointer;
+  text-align: center;
+  padding: 6px 0;
+  font-family: inherit;
+}
+
+.skip-btn:hover {
+  color: #666;
+}
+
+
+/* ==========================================================
+   Chip Select (Q2 — pick artists/songs from OCR)
+   ========================================================== */
+
+.chip-select-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 0 4px;
+  border-top: 2px solid #111;
+}
+
+.chip-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chip-section + .chip-section {
+  border-top: 2px solid #111;
+  padding-top: 10px;
+}
+
+.chip-section-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  opacity: 0.5;
+}
+
+.chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 140px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 2px solid #ddd;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #333;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip:hover {
+  border-color: #999;
+  background: #f9f9f9;
+}
+
+.chip.chip-selected {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+.chip.chip-selected:hover {
+  background: #333;
+  border-color: #333;
+}
+
+.chip-count {
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  opacity: 0.6;
+}
+
+
+/* ==========================================================
+   Button Select (Q9 — Lyrics / Beat / Vibe)
+   ========================================================== */
+
+.button-select-wrap {
+  padding: 8px 0 4px;
+}
+
+.button-options {
+  display: flex;
+  gap: 8px;
+}
+
+.option-btn {
+  flex: 1;
+  height: 48px;
+  border: 2px solid #111;
+  border-radius: 14px;
+  background: #fff;
+  color: #111;
+  font-size: 14px;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.option-btn:hover {
+  background: #111;
+  color: #fff;
+}
+
+.option-btn:active {
+  transform: scale(0.96);
+}
+
+
+/* ==========================================================
+   Chat Skip Link
+   ========================================================== */
+
+.skip-wrap {
+  text-align: center;
+  padding: 2px 0 6px;
+}
+
+.chat-skip-btn {
+  background: none;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #aaa;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 4px 12px;
+  transition: color 0.15s;
+}
+
+.chat-skip-btn:hover {
+  color: #666;
+}
+
+
+/* ==========================================================
+   Header Login / User Menu Button
+   ========================================================== */
+
+.header-user-btn {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: 2px solid #111;
+  border-radius: 50%;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  color: #111;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s;
+}
+
+.header-user-btn:hover {
+  background: #f0f0f0;
+}
+
+
+/* ==========================================================
+   Side Menu (slide-in drawer from right)
+   ========================================================== */
+
+/* Backdrop overlay */
+.side-menu-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 99;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.side-menu-backdrop.is-active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* The drawer panel */
+.side-menu {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 240px;
+  height: 100%;
+  background: #fff;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.14);
+  transform: translateX(100%);
+  transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+  padding: 0;
+  overflow-y: auto;
+}
+
+.side-menu.is-open {
+  transform: translateX(0);
+}
+
+/* Close button */
+.side-menu-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #555;
+  padding: 4px;
+  border-radius: 8px;
+  transition: background 0.15s, color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.side-menu-close:hover {
+  background: #f0f0f0;
+  color: #111;
+}
+
+/* Menu items */
+.side-menu-items {
+  display: flex;
+  flex-direction: column;
+  padding: 56px 0 12px;
+}
+
+.side-menu-item {
+  display: block;
+  width: 100%;
+  padding: 14px 24px;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #111;
+  cursor: pointer;
+  transition: background 0.15s, padding-left 0.2s;
+}
+
+.side-menu-item:hover {
+  background: #f5f5f5;
+  padding-left: 28px;
+}
+
+/* Footer section (logout + contact) */
+.side-menu-footer {
+  margin-top: auto;
+  border-top: 1px solid #eee;
+  padding: 8px 0 12px;
+}
+
+.side-menu-logout {
+  color: #c0392b;
+}
+
+.side-menu-contact {
+  padding: 6px 24px 4px;
+  font-size: 10px;
+  color: #aaa;
+  text-align: left;
+}
+
+
+/* ==========================================================
+   Login Screen
+   ========================================================== */
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 30px 20px;
+}
+
+.login-title {
+  font-size: 22px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.login-subtitle {
+  font-size: 13px;
+  color: #666;
+  text-align: center;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+#screenLogin .signup-btn {
+  width: 100%;
+}
+
+#screenLogin .skip-btn {
+  margin-top: 10px;
+}
+
+
+/* ==========================================================
+   Home Screen (Recent Generations)
+   ========================================================== */
+
+.home-header {
+  font-size: 20px;
+  font-weight: 900;
+  margin-bottom: 4px;
+}
+
+.gen-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.gen-list-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 2px solid #111;
+  border-radius: 14px;
+  background: #fff;
+  transition: background 0.12s;
+}
+
+.gen-list-item:hover {
+  background: #f9f9f9;
+}
+
+.gen-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: #f0f0f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gen-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.gen-thumb-placeholder {
+  font-size: 20px;
+  color: #bbb;
+}
+
+.gen-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.gen-title {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gen-meta {
+  font-size: 11px;
+  color: #888;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gen-empty {
+  text-align: center;
+  color: #999;
+  font-size: 13px;
+  padding: 40px 20px;
+  line-height: 1.5;
+}
+
+
+/* ==========================================================
+   Email Auth Form (Login Screen)
+   ========================================================== */
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  color: #bbb;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 2px 0;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #ddd;
+}
+
+.email-auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.email-auth-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid #111;
+  border-radius: 12px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  background: #fff;
+}
+
+.email-auth-input:focus {
+  border-color: #555;
+}
+
+.email-auth-input::placeholder {
+  color: #aaa;
+}
+
+.email-auth-error {
+  font-size: 11px;
+  color: #c0392b;
+  text-align: center;
+  line-height: 1.3;
+  padding: 0 4px;
+}
+
+.email-auth-success {
+  font-size: 11px;
+  color: #27ae60;
+  text-align: center;
+  line-height: 1.3;
+  padding: 0 4px;
+  font-weight: 600;
+}
