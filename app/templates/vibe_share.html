@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>drVibey Vibe Share</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='public.css') }}?v={{ cache_bust }}" />
+  <style>
+    body.share-body {
+      min-height: 100vh;
+      margin: 0;
+      background: radial-gradient(circle at 20% 10%, #dbeafe, #f8fafc 45%, #e2e8f0 100%);
+      font-family: "Sora", system-ui, -apple-system, Segoe UI, sans-serif;
+      color: #0f172a;
+      display: block;
+      padding: 20px;
+      overflow-y: auto !important;
+      overflow-x: hidden;
+    }
+    .share-wrap {
+      width: min(720px, 100%);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .share-get-vibe-btn {
+      text-decoration: none;
+    }
+    body.share-body.modal-open {
+      overflow: hidden !important;
+    }
+  </style>
+</head>
+<body class="share-body">
+  <main class="share-wrap">
+    <section class="card diagnosis-card">
+      <div class="diagnosis-header">Shared drVibey Profile</div>
+      <div class="diagnosis-avatar-wrap">
+        {% if profile.profile_avatar_url %}
+          <img class="diagnosis-avatar" src="{{ profile.profile_avatar_url }}" alt="Shared anime avatar" />
+        {% else %}
+          <div class="diagnosis-avatar-fallback">♪</div>
+        {% endif %}
+      </div>
+
+      <div class="diagnosis-type-wrap">
+        <div class="diagnosis-type-label">Vibe Type</div>
+        <div class="diagnosis-type">{{ listener_type or '—' }}</div>
+        <div class="diagnosis-type-name">{{ type_meta.name }}</div>
+        <button id="sharedDiagTypeInfoBtn" class="diag-type-info-btn" type="button" aria-haspopup="dialog" aria-controls="sharedDiagTypeModal">What do these codes mean?</button>
+      </div>
+
+      {% if profile.soul_signature %}
+        <div class="diagnosis-soul">
+          <div class="diagnosis-soul-title">Soul Signature</div>
+          <div class="diagnosis-soul-body">{{ profile.soul_signature }}</div>
+        </div>
+      {% endif %}
+
+      <div class="diagnosis-stats">
+        {% for stat in stats %}
+          <div class="diag-stat-row">
+            <div class="diag-stat-label">{{ stat.label }}</div>
+            <div class="diag-stat-track">
+              <div class="diag-stat-fill" data-width="{{ stat.value }}"></div>
+            </div>
+            <div class="diag-stat-value">{{ stat.value }}%</div>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="diagnosis-vocal-focus">
+        <strong>Vocal Focus:</strong> <span class="diagnosis-vocal-badge">{{ vocal_focus }}</span>
+      </div>
+
+      {% if profile.dominant_genres %}
+        <div class="diagnosis-genres"><strong>Style Favs:</strong> {{ (profile.dominant_genres + (profile.subgenres or []))|join(', ') }}</div>
+      {% endif %}
+      {% if profile.identity_artists %}
+        <div class="diagnosis-artists"><strong>Core Artists:</strong> {{ profile.identity_artists|join(', ') }}</div>
+      {% endif %}
+      {% if profile.suggested_artists %}
+        <div class="diagnosis-artists"><strong>Suggested Artists:</strong> {{ profile.suggested_artists|join(', ') }}</div>
+      {% endif %}
+    </section>
+
+    <div id="sharedDiagTypeModal" class="diag-type-modal is-hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="sharedDiagTypeModalTitle">
+      <div id="sharedDiagTypeModalBackdrop" class="diag-type-modal-backdrop"></div>
+      <div class="diag-type-modal-panel" role="document">
+        <div class="diag-type-modal-head">
+          <h3 id="sharedDiagTypeModalTitle">Vibe Type Guide</h3>
+          <button id="sharedDiagTypeModalClose" type="button" class="diag-type-modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="diag-type-legend">F/N: Futuristic or Nostalgic · V/I: Vocal-led or Instrumental-led · P/C: Powerful or Chill · D/R: Dreamer or Realist</div>
+        <div class="diag-type-catalog">
+          {% for code, meta in type_catalog_items %}
+            <div class="diag-type-item">
+              <div class="diag-type-item-code">{{ code }}</div>
+              <div class="diag-type-item-name">{{ meta.name }}</div>
+              <div class="diag-type-item-desc">{{ meta.description }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <a class="primary-btn share-get-vibe-btn" href="{{ url_for('public.public_home') }}">Get my vibe</a>
+  </main>
+  <script>
+    (function () {
+      var fills = document.querySelectorAll('.diag-stat-fill[data-width]');
+      fills.forEach(function (el) {
+        var value = Number(el.getAttribute('data-width'));
+        if (!Number.isFinite(value)) return;
+        var bounded = Math.max(0, Math.min(100, Math.round(value)));
+        el.style.width = bounded + '%';
+      });
+
+      var modal = document.getElementById('sharedDiagTypeModal');
+      var infoBtn = document.getElementById('sharedDiagTypeInfoBtn');
+      var closeBtn = document.getElementById('sharedDiagTypeModalClose');
+      var backdrop = document.getElementById('sharedDiagTypeModalBackdrop');
+
+      function openTypeModal() {
+        if (!modal) return;
+        modal.classList.remove('is-hidden');
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('modal-open');
+      }
+
+      function closeTypeModal() {
+        if (!modal) return;
+        modal.classList.add('is-hidden');
+        modal.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('modal-open');
+      }
+
+      if (infoBtn) infoBtn.addEventListener('click', openTypeModal);
+      if (closeBtn) closeBtn.addEventListener('click', closeTypeModal);
+      if (backdrop) backdrop.addEventListener('click', closeTypeModal);
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeTypeModal();
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -3,12 +3,14 @@ from __future__ import annotations
 import random
 import time
 import uuid
-from flask import Blueprint, render_template, request, session, url_for, redirect
+
+from flask import Blueprint, current_app, jsonify, render_template, request, redirect, session, url_for
 
 from app.extensions import db
-from app.models import User, ProviderAccount
+from app.models import User, ProviderAccount, ListenerProfile
 from app.services.moods import MOODS
 from app.services.activities import ACTIVITIES
+from app.services.type_catalog import TYPE_CATALOG, get_type_meta
 
 public_bp = Blueprint("public", __name__)
 demo_bp = Blueprint("demo", __name__, url_prefix="/demo")
@@ -19,6 +21,16 @@ GENRE_LIST = [
     "Pop", "Hip-Hop", "R&B", "Rock", "Indie",
     "Electronic", "Jazz", "Classical", "Country",
     "Latin", "Metal", "Folk", "Reggae", "Blues", "Funk",
+]
+
+LANGUAGE_OPTIONS = [
+    "English",
+    "Spanish",
+    "French",
+    "Chinese",
+    "Korean",
+    "Japanese",
+    "Russian",
 ]
 
 
@@ -52,6 +64,71 @@ def ensure_demo_session() -> User:
 def is_spotify_connected(user_id: int) -> bool:
     acct = ProviderAccount.query.filter_by(user_id=user_id, provider="spotify").first()
     return acct is not None
+
+
+def _clamp01(value, default: float = 0.5) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, min(1.0, v))
+
+
+def _normalize_listener_type(profile: dict, diagnosis: dict) -> str:
+    raw = str(((profile.get("listener_persona") or {}).get("listener_mbti_like") or diagnosis.get("listener_mbti_like") or "")).strip().upper()
+    if raw in TYPE_CATALOG:
+        return raw
+
+    novelty = _clamp01(profile.get("discovery_drive"), 0.5)
+    openness = _clamp01((profile.get("emotional_profile") or {}).get("emotional_depth"), 0.5)
+    intensity = _clamp01((profile.get("energy_range") or {}).get("high"), 0.5)
+    introspection = _clamp01((profile.get("emotional_profile") or {}).get("emotional_depth"), 0.5)
+
+    c1 = "F" if novelty >= 0.5 else "N"
+    c2 = "V" if openness >= 0.5 else "I"
+    c3 = "P" if intensity >= 0.5 else "C"
+    c4 = "D" if introspection >= 0.5 else "R"
+    return f"{c1}{c2}{c3}{c4}"
+
+
+def _pct(value, default: float = 0.5) -> int:
+    return round(_clamp01(value, default) * 100)
+
+
+def _get_power_pct(profile: dict, listener_type: str) -> int:
+    code = str(listener_type or "")
+    if len(code) >= 3 and code[2] == "P":
+        return 82
+    if len(code) >= 3 and code[2] == "C":
+        return 38
+    return _pct((profile.get("energy_range") or {}).get("high"), 0.5)
+
+
+def _get_nostalgia_pct(profile: dict, listener_type: str) -> int:
+    code = str(listener_type or "")
+    if code.startswith("N"):
+        return 78
+    if code.startswith("F"):
+        return 34
+    return _pct((profile.get("emotional_profile") or {}).get("emotional_depth"), 0.5)
+
+
+def _get_vocal_focus_descriptor(profile: dict, listener_type: str) -> str:
+    orientation = str(profile.get("listening_orientation") or "").lower()
+    vocals = str((profile.get("production_traits") or {}).get("vocals") or "").lower()
+    vibes = [str(v).lower() for v in (profile.get("vibe_keywords") or [])]
+
+    if "breathy" in vocals:
+        return "Breathy"
+    if "airy" in vocals or any("dream" in v or "haze" in v for v in vibes):
+        return "Airy"
+    if "deep" in vocals or any("dark" in v or "melanch" in v for v in vibes):
+        return "Deep"
+    if orientation in {"lyrics", "voice"}:
+        return "Textured"
+    if len(listener_type or "") >= 2 and listener_type[1] == "I":
+        return "Minimal"
+    return "Textured"
 
 
 @public_bp.get("/")
@@ -131,7 +208,6 @@ def public_home():
             }
         )
 
-    from flask import current_app
     cfg = current_app.config
     return render_template(
         "public.html",
@@ -139,6 +215,7 @@ def public_home():
         mood_items=mood_items,
         activity_items=activity_items,
         genre_list=GENRE_LIST,
+        language_options=LANGUAGE_OPTIONS,
         cache_bust=int(time.time()),
         firebase_config={
             "apiKey": cfg.get("FIREBASE_WEB_API_KEY", ""),
@@ -164,10 +241,57 @@ def demo_reset():
     return redirect(url_for("public.public_home"))
 
 
+@public_bp.get("/vibe/<int:profile_id>/<token>")
+def public_vibe_share(profile_id: int, token: str):
+    lp = ListenerProfile.query.get(profile_id)
+    if not lp:
+        return redirect(url_for("public.public_home"))
+
+    profile = lp.profile_json or {}
+    saved_token = str(profile.get("share_token") or "").strip()
+    if not saved_token or saved_token != str(token or "").strip():
+        return redirect(url_for("public.public_home"))
+
+    explain = lp.explain_json or {}
+    diagnosis = explain.get("diagnosis") or {}
+    listener_type = _normalize_listener_type(profile, diagnosis)
+    type_meta = get_type_meta(listener_type)
+    stats = [
+        {"label": "Emotional Depth", "value": _pct((profile.get("emotional_profile") or {}).get("emotional_depth"), 0.5)},
+        {"label": "Curiosity", "value": _pct(profile.get("discovery_drive"), 0.5)},
+        {"label": "Power", "value": _get_power_pct(profile, listener_type)},
+        {"label": "Nostalgia Level", "value": _get_nostalgia_pct(profile, listener_type)},
+    ]
+    vocal_focus = _get_vocal_focus_descriptor(profile, listener_type)
+
+    return render_template(
+        "vibe_share.html",
+        profile=profile,
+        diagnosis=diagnosis,
+        listener_type=listener_type,
+        type_meta=type_meta,
+        type_catalog_items=sorted(TYPE_CATALOG.items()),
+        stats=stats,
+        vocal_focus=vocal_focus,
+        profile_id=profile_id,
+        cache_bust=int(time.time()),
+    )
+
+
 @public_bp.get("/public")
 def public_legacy_redirect():
     """Backwards-compat: old /public URL redirects to /."""
     return redirect(url_for("public.public_home"))
+
+
+@public_bp.route("/callback", methods=["GET", "POST", "OPTIONS"])
+def suno_callback():
+    """
+    Accept Suno callback pings.
+    We poll record-info for results, but returning 200 here prevents
+    CALLBACK_EXCEPTION statuses from a missing endpoint.
+    """
+    return jsonify({"ok": True})
 
 
 @public_bp.before_app_request

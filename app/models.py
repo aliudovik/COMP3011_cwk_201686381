@@ -109,5 +109,6 @@ class Generation(db.Model):
     error = db.Column(db.Text)
 
     is_favourite = db.Column(db.Boolean, default=False, nullable=False, server_default="false")
+    like_status = db.Column(db.Text, default=None)  # null | "liked" | "disliked"
 
     created_at = db.Column(db.DateTime(timezone=True), default=datetime.utcnow, nullable=False)

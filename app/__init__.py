@@ -65,6 +65,7 @@ def create_app():
     from .routes.api import api_bp
     from .routes.public import public_bp, demo_bp
     from .routes.firebase_auth import firebase_auth_bp
+    from .routes.google_signin import google_signin_bp
 
     app.register_blueprint(web_bp, url_prefix="/dev")
     app.register_blueprint(auth_bp)
@@ -74,5 +75,6 @@ def create_app():
 
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(firebase_auth_bp, url_prefix="/api/auth")
+    app.register_blueprint(google_signin_bp)
 
     return app

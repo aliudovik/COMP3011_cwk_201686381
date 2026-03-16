@@ -47,3 +47,9 @@ Thumbs.db
 .env
 node_modules
 
+# Python bytecode
+__pycache__/
+*.pyc
+
+
+app/static/image-api-key.txt

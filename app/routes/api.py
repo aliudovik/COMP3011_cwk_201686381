@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+import uuid
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint, current_app, jsonify, request
+from sqlalchemy import func
 
 log = logging.getLogger("drvibey.api")
 
 from app.models import User, ProviderAccount, ListenerProfile, Generation
-from app.services.openai_prompt import generate_suno_payload_with_openai
 from app.services.drvibey_chat import (
     get_initial_message,
     get_next_question,
@@ -17,6 +21,7 @@ from app.services.drvibey_chat import (
     synthesize_profile,
     SKIP_TOKEN,
 )
+from app.services.psychoacoustic import generate_test_config, score_test
 from app.services.ocr import (
     extract_tracks_from_images,
     save_upload_to_temp,
@@ -32,6 +37,18 @@ from app.jobs.tasks import (
 )
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
+
+SUPPORTED_GENERATION_LANGUAGES = {
+    "english",
+    "spanish",
+    "french",
+    "chinese",
+    "korean",
+    "japanese",
+    "russian",
+}
+
+PLAYBACK_WINDOW_MINUTES = 90
 
 
 # ---------------------------------------------------------------------
@@ -94,6 +111,47 @@ def _set_generation_mood(gen: Generation, mood_value) -> None:
         setattr(gen, "mood_key", mood)
 
 
+def _json_ok(payload: dict, status: int = 200):
+    out = {"ok": True}
+    if isinstance(payload, dict):
+        out.update(payload)
+    return jsonify(out), status
+
+
+def _json_error(message: str, status: int, code: str):
+    return jsonify({"ok": False, "error": {"code": code, "message": message}}), status
+
+
+def _require_session_user_id():
+    from flask import session as flask_session
+
+    user_id = flask_session.get("user_id")
+    if not user_id:
+        return None
+    try:
+        return int(user_id)
+    except Exception:
+        return None
+
+
+def _generation_summary(gen: Generation) -> dict:
+    return {
+        "id": gen.id,
+        "user_id": gen.user_id,
+        "listener_profile_id": gen.listener_profile_id,
+        "mood": gen.mood,
+        "mood_intensity": gen.mood_intensity,
+        "activity": gen.activity,
+        "song_reference": gen.song_reference,
+        "genre": gen.genre,
+        "bpm": gen.bpm,
+        "status": gen.status,
+        "is_favourite": bool(gen.is_favourite),
+        "like_status": gen.like_status,
+        "created_at": gen.created_at.isoformat() if gen.created_at else None,
+    }
+
+
 # ---------------------------------------------------------------------
 # JS: POST /api/ingest
 # body: { provider: "spotify", source: "top" }
@@ -145,16 +203,14 @@ def profile_rebuild():
 # ---------------------------------------------------------------------
 @api_bp.post("/generate")
 def generate():
-    from flask import session as flask_session
-    if not flask_session.get("is_authenticated"):
-        return jsonify({"ok": False, "error": "Please sign in to generate music"}), 403
+    req_started_at = time.perf_counter()
 
     body = request.get_json(silent=True) or {}
     user_id = _resolve_user_id(body)
 
     mood_value = body.get("mood") or body.get("mood_id") or "energetic"
     instrumental = bool(body.get("instrumental", False))
-    custom_mode = bool(body.get("custom_mode", False))
+    custom_mode = True
     title = (body.get("title_hint") or body.get("title") or "").strip()
     style = (body.get("style_hint") or body.get("style") or "").strip()
 
@@ -166,6 +222,10 @@ def generate():
     activity_id = (body.get("activity") or "").strip().lower() or None
     song_reference = (body.get("song_reference") or "").strip() or None
     genre_override = (body.get("genre") or "").strip() or None
+    language = (body.get("language") or "english").strip().lower() or "english"
+    if language not in SUPPORTED_GENERATION_LANGUAGES:
+        language = "english"
+    surprise_me = bool(body.get("surprise_me", False))
     bpm_target = body.get("bpm") or None
     if bpm_target is not None:
         try:
@@ -182,29 +242,7 @@ def generate():
     if not lp:
         return jsonify({"ok": False, "error": "No listener profile found. Build profile first."}), 400
 
-    cerebras_api_key = current_app.config.get("CEREBRAS_API_KEY", "") or os.getenv("CEREBRAS_API_KEY", "")
-    llm_model = current_app.config.get("LLM_MODEL", "llama-3.3-70b")
-
-    try:
-        out = generate_suno_payload_with_openai(
-            cerebras_api_key=cerebras_api_key,
-            model=llm_model,
-            profile_json=lp.profile_json,
-            mood_id=str(mood_value),
-            mood_intensity=mood_intensity,
-            activity_id=activity_id,
-            instrumental=instrumental,
-            song_reference=song_reference,
-            genre_override=genre_override,
-            bpm_target=bpm_target,
-            custom_mode=custom_mode,
-            title_hint=title,
-            style_hint=style,
-        )
-    except Exception as e:
-        return jsonify({"ok": False, "error": "Prompt generation failed", "details": str(e)}), 500
-
-    # Create Generation row with all fields
+    # Queue-first path: persist generation quickly, then let worker build prompt + run provider calls.
     gen = Generation(user_id=user_id)
     gen.listener_profile_id = lp.id
     _set_generation_mood(gen, mood_value)
@@ -236,14 +274,46 @@ def generate():
     gen.genre = genre_override
     gen.bpm = bpm_target
 
-    gen.openai_prompt = out.get("openai_prompt") or {}
-    gen.suno_request = out.get("suno_payload") or {}
+    # Worker fills these in. Keep JSON fields non-null for schema compatibility.
+    gen.openai_prompt = {}
+    gen.suno_request = {
+        "controls": {
+            "language": language,
+            "surprise_me": surprise_me,
+        }
+    }
     gen.status = "queued"
 
     db.session.add(gen)
     db.session.commit()
 
-    job = enqueue(current_app, run_generation_pipeline, gen.id)
+    committed_ms = int((time.perf_counter() - req_started_at) * 1000)
+    log.info(
+        "[generate] queued row committed generation_id=%s user_id=%s in %dms",
+        gen.id,
+        user_id,
+        committed_ms,
+    )
+
+    try:
+        job = enqueue(current_app, run_generation_pipeline, gen.id)
+    except Exception as e:
+        gen.status = "failed"
+        gen.result_json = {
+            "error": "Failed to enqueue generation job",
+            "details": str(e),
+        }
+        db.session.commit()
+        log.exception("[generate] enqueue failed for generation_id=%s", gen.id)
+        return jsonify({"ok": False, "error": "Generation queue unavailable"}), 503
+
+    total_ms = int((time.perf_counter() - req_started_at) * 1000)
+    log.info(
+        "[generate] enqueue succeeded generation_id=%s job_id=%s total=%dms",
+        gen.id,
+        job.id,
+        total_ms,
+    )
     return jsonify({"ok": True, "generation_id": gen.id, "job_id": job.id})
 
 
@@ -255,10 +325,18 @@ def generate():
 def generation_status(generation_id: int):
     gen = db.session.get(Generation, generation_id)
     if not gen:
-        return jsonify({"ok": False, "error": "Not found"}), 404
+        return _json_error("Generation not found", 404, "not_found")
+
+    user_id = _require_session_user_id()
+    if user_id and gen.user_id != user_id:
+        return _json_error("Forbidden", 403, "forbidden")
 
     status = gen.status or "unknown"
     result = gen.result_json or {}
+    result = _sanitize_generation_result_for_client(
+        result,
+        allow_playback=_is_generation_playable(gen),
+    )
 
     error = None
     if status == "failed":
@@ -267,15 +345,110 @@ def generation_status(generation_id: int):
         else:
             error = "Generation failed"
 
-    return jsonify(
+    return _json_ok(
         {
-            "ok": True,
             "generation_id": gen.id,
             "status": status,
             "result": result,
             "error": error,
+            "is_favourite": gen.is_favourite,
+            "like_status": gen.like_status,
+            "created_at": gen.created_at.isoformat() if gen.created_at else None,
         }
     )
+
+
+@api_bp.patch("/generation/<int:generation_id>")
+def update_generation(generation_id: int):
+    user_id = _require_session_user_id()
+    if not user_id:
+        return _json_error("Not logged in", 401, "unauthorized")
+
+    gen = Generation.query.filter_by(id=generation_id, user_id=user_id).first()
+    if not gen:
+        return _json_error("Generation not found", 404, "not_found")
+
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or not body:
+        return _json_error("Request body must be a non-empty JSON object", 400, "validation_error")
+
+    mutable_fields = {"activity", "song_reference", "genre", "is_favourite", "like_status"}
+    changed = False
+
+    if "mood" in body:
+        mood_value = str(body.get("mood") or "").strip().lower()
+        if not mood_value:
+            return _json_error("mood cannot be empty", 400, "validation_error")
+        _set_generation_mood(gen, mood_value)
+        changed = True
+
+    if "mood_intensity" in body:
+        try:
+            mood_intensity = float(body.get("mood_intensity"))
+        except (TypeError, ValueError):
+            return _json_error("mood_intensity must be a number between 0 and 1", 400, "validation_error")
+        if mood_intensity < 0 or mood_intensity > 1:
+            return _json_error("mood_intensity must be between 0 and 1", 400, "validation_error")
+        gen.mood_intensity = mood_intensity
+        changed = True
+
+    if "bpm" in body:
+        bpm_raw = body.get("bpm")
+        if bpm_raw in (None, ""):
+            gen.bpm = None
+            changed = True
+        else:
+            try:
+                bpm_value = int(bpm_raw)
+            except (TypeError, ValueError):
+                return _json_error("bpm must be an integer", 400, "validation_error")
+            if bpm_value < 1:
+                return _json_error("bpm must be a positive integer", 400, "validation_error")
+            gen.bpm = bpm_value
+            changed = True
+
+    for key in mutable_fields:
+        if key not in body:
+            continue
+        if key == "like_status":
+            new_status = body.get("like_status")
+            if new_status not in ("liked", "disliked", None):
+                return _json_error("like_status must be 'liked', 'disliked', or null", 400, "validation_error")
+            gen.like_status = new_status
+            changed = True
+            continue
+        if key == "is_favourite":
+            gen.is_favourite = bool(body.get("is_favourite"))
+            changed = True
+            continue
+
+        value = body.get(key)
+        if value is None:
+            setattr(gen, key, None)
+        else:
+            setattr(gen, key, str(value).strip() or None)
+        changed = True
+
+    if not changed:
+        return _json_error("No valid updatable fields provided", 400, "validation_error")
+
+    db.session.commit()
+    return _json_ok({"generation": _generation_summary(gen)})
+
+
+@api_bp.delete("/generation/<int:generation_id>")
+def delete_generation(generation_id: int):
+    user_id = _require_session_user_id()
+    if not user_id:
+        return _json_error("Not logged in", 401, "unauthorized")
+
+    gen = Generation.query.filter_by(id=generation_id, user_id=user_id).first()
+    if not gen:
+        return _json_error("Generation not found", 404, "not_found")
+
+    db.session.delete(gen)
+    db.session.commit()
+    return "", 204
 
 
 # =====================================================================
@@ -357,7 +530,7 @@ def chat_upload_screenshots():
             current_app.config.get("CEREBRAS_API_KEY", "")
             or os.getenv("CEREBRAS_API_KEY", "")
         )
-        llm_model = current_app.config.get("LLM_MODEL", "llama-3.3-70b")
+        llm_model = current_app.config.get("LLM_MODEL", "gpt-oss-120b")
 
         if cerebras_api_key and parsed_tracks:
             try:
@@ -416,7 +589,7 @@ def chat_build_profile():
         current_app.config.get("CEREBRAS_API_KEY", "")
         or os.getenv("CEREBRAS_API_KEY", "")
     )
-    llm_model = current_app.config.get("LLM_MODEL", "llama-3.3-70b")
+    llm_model = current_app.config.get("LLM_MODEL", "gpt-oss-120b")
 
     if not cerebras_api_key:
         return jsonify({"ok": False, "error": "CEREBRAS_API_KEY not configured"}), 500
@@ -498,6 +671,43 @@ def get_profile():
 
 
 # ---------------------------------------------------------------------
+# POST /api/profile/share
+# body: { user_id, listener_profile_id? }
+# Returns: { ok, share_url, listener_profile_id }
+# ---------------------------------------------------------------------
+@api_bp.post("/profile/share")
+def share_profile():
+    body = request.get_json(silent=True) or {}
+    user_id = _resolve_user_id(body)
+    listener_profile_id = body.get("listener_profile_id")
+
+    q = ListenerProfile.query.filter_by(user_id=user_id)
+    if listener_profile_id is not None:
+        q = q.filter_by(id=listener_profile_id)
+
+    lp = q.order_by(ListenerProfile.version.desc()).first()
+    if not lp:
+        return jsonify({"ok": False, "error": "Profile not found"}), 404
+
+    profile_json = dict(lp.profile_json or {})
+    token = str(profile_json.get("share_token") or "").strip()
+    if not token:
+        token = uuid.uuid4().hex
+        profile_json["share_token"] = token
+        lp.profile_json = profile_json
+        db.session.commit()
+
+    base_url = request.url_root.rstrip("/")
+    share_url = f"{base_url}/vibe/{lp.id}/{token}"
+
+    return jsonify({
+        "ok": True,
+        "listener_profile_id": lp.id,
+        "share_url": share_url,
+    })
+
+
+# ---------------------------------------------------------------------
 # GET /api/generations
 # Returns current user's generations list (most recent first)
 # ---------------------------------------------------------------------
@@ -524,14 +734,14 @@ def list_generations():
             "activity": g.activity,
             "status": g.status,
             "is_favourite": bool(g.is_favourite),
+            "like_status": g.like_status,
             "created_at": g.created_at.isoformat() if g.created_at else None,
             "title": None,
             "cover_url": None,
             "audio_url": None,
-            "download_url": None,
+            "similar_songs": None,
         }
 
-        # Extract song info from result_json for succeeded generations
         if g.status == "succeeded" and g.result_json:
             song = _extract_song(g.result_json)
             if song:
@@ -540,9 +750,12 @@ def list_generations():
                     song.get("imageUrl") or song.get("sourceImageUrl")
                     or song.get("image_url") or song.get("source_image_url")
                 )
-                audio_url, download_url = _extract_urls(song)
+                audio_url, _dl = _extract_urls(
+                    song,
+                    allow_playback=_is_generation_playable(g),
+                )
                 item["audio_url"] = audio_url
-                item["download_url"] = download_url
+            item["similar_songs"] = (g.result_json or {}).get("similar_songs")
 
         items.append(item)
 
@@ -576,11 +789,12 @@ def list_favourites():
             "activity": g.activity,
             "status": g.status,
             "is_favourite": True,
+            "like_status": g.like_status,
             "created_at": g.created_at.isoformat() if g.created_at else None,
             "title": None,
             "cover_url": None,
             "audio_url": None,
-            "download_url": None,
+            "similar_songs": None,
         }
 
         if g.status == "succeeded" and g.result_json:
@@ -591,9 +805,12 @@ def list_favourites():
                     song.get("imageUrl") or song.get("sourceImageUrl")
                     or song.get("image_url") or song.get("source_image_url")
                 )
-                audio_url, download_url = _extract_urls(song)
+                audio_url, _dl = _extract_urls(
+                    song,
+                    allow_playback=_is_generation_playable(g),
+                )
                 item["audio_url"] = audio_url
-                item["download_url"] = download_url
+            item["similar_songs"] = (g.result_json or {}).get("similar_songs")
 
         items.append(item)
 
@@ -607,14 +824,13 @@ def list_favourites():
 # ---------------------------------------------------------------------
 @api_bp.patch("/generation/<int:generation_id>/favourite")
 def toggle_favourite(generation_id: int):
-    from flask import session as flask_session
-    user_id = flask_session.get("user_id")
+    user_id = _require_session_user_id()
     if not user_id:
-        return jsonify({"ok": False, "error": "Not logged in"}), 401
+        return _json_error("Not logged in", 401, "unauthorized")
 
     gen = Generation.query.filter_by(id=generation_id, user_id=user_id).first()
     if not gen:
-        return jsonify({"ok": False, "error": "Not found"}), 404
+        return _json_error("Generation not found", 404, "not_found")
 
     body = request.get_json(silent=True) or {}
     if "is_favourite" in body:
@@ -624,91 +840,171 @@ def toggle_favourite(generation_id: int):
         gen.is_favourite = not gen.is_favourite
 
     db.session.commit()
-    return jsonify({"ok": True, "is_favourite": gen.is_favourite})
+    return _json_ok({"is_favourite": gen.is_favourite})
 
 
 # ---------------------------------------------------------------------
-# GET /api/generation/<id>/download-url
-# Returns the final (non-stream) download URL, re-fetching from Suno
-# if not yet available in result_json.
+# PATCH /api/generation/<id>/like
+# Set like_status on a generation: "liked", "disliked", or null
+# Body: { "like_status": "liked" | "disliked" | null }
 # ---------------------------------------------------------------------
-@api_bp.get("/generation/<int:generation_id>/download-url")
-def generation_download_url(generation_id: int):
-    from flask import session as flask_session
-    user_id = flask_session.get("user_id")
+@api_bp.patch("/generation/<int:generation_id>/like")
+def set_like_status(generation_id: int):
+    user_id = _require_session_user_id()
     if not user_id:
-        return jsonify({"ok": False, "error": "Not logged in"}), 401
+        return _json_error("Not logged in", 401, "unauthorized")
 
     gen = Generation.query.filter_by(id=generation_id, user_id=user_id).first()
     if not gen:
-        return jsonify({"ok": False, "error": "Not found"}), 404
+        return _json_error("Generation not found", 404, "not_found")
 
-    # 1. Check if we already have a final download URL in result_json
-    song = _extract_song(gen.result_json) if gen.result_json else None
-    if song:
-        _, download_url = _extract_urls(song)
-        if download_url:
-            return jsonify({"ok": True, "download_url": download_url})
+    body = request.get_json(silent=True) or {}
+    new_status = body.get("like_status")
+    if new_status not in ("liked", "disliked", None):
+        return _json_error("Invalid like_status", 400, "validation_error")
 
-    # 2. No final URL yet -- re-fetch from Suno API once
-    task_id = None
-    if gen.result_json and isinstance(gen.result_json, dict):
-        task_id = gen.result_json.get("taskId") or gen.suno_job_id
-    if not task_id:
-        task_id = gen.suno_job_id
+    gen.like_status = new_status
+    db.session.commit()
+    return _json_ok({"like_status": gen.like_status})
 
-    if not task_id:
-        return jsonify({"ok": True, "download_url": None})
 
+@api_bp.get("/analytics/generations/summary")
+def generation_analytics_summary():
+    user_id = _require_session_user_id()
+    if not user_id:
+        return _json_error("Not logged in", 401, "unauthorized")
+
+    days_param = request.args.get("days", "30")
     try:
-        from app.services.suno_client import SunoClient
-        suno_base_url = current_app.config.get("SUNO_BASE_URL", "") or os.getenv("SUNO_BASE_URL", "https://api.sunoapi.org")
-        suno_api_key = current_app.config.get("SUNO_API_KEY", "") or os.getenv("SUNO_API_KEY", "")
+        days = int(days_param)
+    except (TypeError, ValueError):
+        return _json_error("days must be an integer", 400, "validation_error")
 
-        suno = SunoClient(
-            base_url=suno_base_url,
-            api_key=suno_api_key,
-            timeout_s=int(os.getenv("SUNO_TIMEOUT_S", "30")),
+    if days < 1 or days > 365:
+        return _json_error("days must be between 1 and 365", 400, "validation_error")
+
+    cutoff = _utcnow() - timedelta(days=days)
+    base_q = Generation.query.filter(Generation.user_id == user_id, Generation.created_at >= cutoff)
+
+    total_generations = base_q.count()
+    favourite_count = base_q.filter(Generation.is_favourite.is_(True)).count()
+    favourite_rate = round((favourite_count / total_generations), 4) if total_generations else 0.0
+
+    status_rows = (
+        db.session.query(Generation.status, func.count(Generation.id))
+        .filter(Generation.user_id == user_id, Generation.created_at >= cutoff)
+        .group_by(Generation.status)
+        .all()
+    )
+    status_breakdown = {str(status or "unknown"): int(count) for status, count in status_rows}
+
+    mood_rows = (
+        db.session.query(Generation.mood, func.count(Generation.id))
+        .filter(Generation.user_id == user_id, Generation.created_at >= cutoff, Generation.mood.isnot(None))
+        .group_by(Generation.mood)
+        .order_by(func.count(Generation.id).desc())
+        .limit(5)
+        .all()
+    )
+    top_moods = [{"mood": str(mood), "count": int(count)} for mood, count in mood_rows if mood]
+
+    activity_rows = (
+        db.session.query(Generation.activity, func.count(Generation.id))
+        .filter(Generation.user_id == user_id, Generation.created_at >= cutoff, Generation.activity.isnot(None))
+        .group_by(Generation.activity)
+        .order_by(func.count(Generation.id).desc())
+        .limit(5)
+        .all()
+    )
+    top_activities = [{"activity": str(activity), "count": int(count)} for activity, count in activity_rows if activity]
+
+    avg_mood_intensity = (
+        db.session.query(func.avg(Generation.mood_intensity))
+        .filter(
+            Generation.user_id == user_id,
+            Generation.created_at >= cutoff,
+            Generation.mood_intensity.isnot(None),
         )
-        details = suno.get_generation_details(str(task_id))
+        .scalar()
+    )
 
-        # Merge fresh details into result_json
-        if details:
-            updated = {**(gen.result_json or {}), "record_info": details}
-            suno_status = (details.get("data", {}).get("status") or "").upper()
-            if suno_status:
-                updated["suno_status"] = suno_status
-            gen.result_json = updated
-            db.session.commit()
-
-        # Check again for download URL
-        song = _extract_song(gen.result_json)
-        if song:
-            _, download_url = _extract_urls(song)
-            if download_url:
-                return jsonify({"ok": True, "download_url": download_url})
-
-    except Exception as e:
-        log.warning("download-url re-fetch failed for gen %s: %s", generation_id, e)
-
-    return jsonify({"ok": True, "download_url": None})
+    return _json_ok(
+        {
+            "window_days": days,
+            "total_generations": total_generations,
+            "favourite_count": favourite_count,
+            "favourite_rate": favourite_rate,
+            "status_breakdown": status_breakdown,
+            "top_moods": top_moods,
+            "top_activities": top_activities,
+            "avg_mood_intensity": round(float(avg_mood_intensity), 4) if avg_mood_intensity is not None else None,
+        }
+    )
 
 
-def _extract_urls(song):
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _is_generation_playable(gen: Generation) -> bool:
+    if not gen or not gen.created_at:
+        return False
+    created_at = gen.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    else:
+        created_at = created_at.astimezone(timezone.utc)
+    cutoff = created_at + timedelta(minutes=PLAYBACK_WINDOW_MINUTES)
+    return _utcnow() <= cutoff
+
+
+def _sanitize_generation_result_for_client(result_json, allow_playback: bool):
+    if not isinstance(result_json, dict):
+        return result_json
+
+    sanitized = deepcopy(result_json)
+
+    download_keys = (
+        "audioUrl",
+        "sourceAudioUrl",
+        "audio_url",
+        "source_audio_url",
+    )
+    playback_keys = (
+        "streamAudioUrl",
+        "sourceStreamAudioUrl",
+        "stream_audio_url",
+        "source_stream_audio_url",
+    )
+
+    def scrub(node):
+        if isinstance(node, dict):
+            for key in download_keys:
+                node.pop(key, None)
+            if not allow_playback:
+                for key in playback_keys:
+                    node.pop(key, None)
+            for value in node.values():
+                scrub(value)
+        elif isinstance(node, list):
+            for value in node:
+                scrub(value)
+
+    scrub(sanitized)
+    return sanitized
+
+
+def _extract_urls(song, allow_playback: bool = True):
     """Return (audio_url, download_url) from a song object.
 
-    audio_url   = best URL for real-time playback (prefer stream)
-    download_url = final .mp3 URL only (non-stream); None if not yet available
+    audio_url    = stream URL for playback when generation is still playable
+    download_url = always None (downloads are disabled)
     """
     if not song:
         return None, None
 
-    # Final / downloadable MP3 URLs (non-stream)
-    download_url = (
-        song.get("audioUrl") or song.get("sourceAudioUrl")
-        or song.get("audio_url") or song.get("source_audio_url")
-        or None
-    )
+    # Downloads are intentionally disabled for all generated songs.
+    download_url = None
 
     # Streaming URLs (for real-time playback)
     stream_url = (
@@ -717,8 +1013,8 @@ def _extract_urls(song):
         or None
     )
 
-    # For playback: prefer stream (plays immediately), fall back to final
-    audio_url = stream_url or download_url
+    # Playback expires after the configured window.
+    audio_url = stream_url if allow_playback else None
 
     return audio_url, download_url
 
@@ -749,3 +1045,88 @@ def _extract_song(result_json):
     if isinstance(tracks, list) and len(tracks) > 0:
         return tracks[0]
     return None
+
+
+# ---------------------------------------------------------------------
+# Psychoacoustic personality assessment
+# ---------------------------------------------------------------------
+@api_bp.get("/psychoacoustic/config")
+def psychoacoustic_config():
+    """Return a randomized test configuration for a new session."""
+    try:
+        cfg = generate_test_config()
+        return jsonify({"ok": True, **cfg})
+    except Exception as exc:
+        log.exception("psychoacoustic config error")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@api_bp.post("/psychoacoustic/submit")
+def psychoacoustic_submit():
+    """
+    Receive all 30 answers, score them, save profile, return result.
+
+    Expected body:
+    {
+      "user_id": int | null,
+      "audio_answers": [{"id": str, "value": int(1-6), "swapped": bool}, ...],
+      "text_answers":  [{"id": str, "value": int(1-6), "swapped": bool}, ...]
+    }
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    user_id = _resolve_user_id(body)
+
+    audio_answers = body.get("audio_answers", [])
+    text_answers = body.get("text_answers", [])
+
+    if len(audio_answers) != 17:
+        return jsonify({"ok": False, "error": f"Expected 17 audio answers, got {len(audio_answers)}"}), 400
+    if len(text_answers) != 13:
+        return jsonify({"ok": False, "error": f"Expected 13 text answers, got {len(text_answers)}"}), 400
+
+    try:
+        result = score_test(audio_answers, text_answers)
+    except Exception as exc:
+        log.exception("psychoacoustic scoring error")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    # Build profile_json and explain_json for storage
+    profile_json = {
+        "profile_type": "psychoacoustic",
+        "psychoacoustic_code": result["psychoacoustic_code"],
+        "axis_scores": result["axis_scores"],
+        "audio_preferences": result["audio_preferences"],
+    }
+
+    explain_json = {
+        "profile_type": "psychoacoustic",
+        "code": result["psychoacoustic_code"],
+        "title": result["title"],
+        "sections": result["sections"],
+        "axis_scores": result["axis_scores"],
+    }
+
+    # Save to DB
+    try:
+        lp = ListenerProfile(
+            user_id=user_id,
+            profile_json=profile_json,
+            explain_json=explain_json,
+            built_from_track_count=0,
+        )
+        db.session.add(lp)
+        db.session.commit()
+
+        log.info("Psychoacoustic profile saved: id=%s user=%s code=%s",
+                 lp.id, user_id, result["psychoacoustic_code"])
+    except Exception as exc:
+        db.session.rollback()
+        log.exception("psychoacoustic DB save error")
+        return jsonify({"ok": False, "error": "Failed to save profile"}), 500
+
+    return jsonify({
+        "ok": True,
+        "profile": profile_json,
+        "diagnosis": explain_json,
+        "listener_profile_id": lp.id,
+    })

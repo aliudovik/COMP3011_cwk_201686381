@@ -10,7 +10,7 @@
 
   // Chat state
   let gChatHistory = [];           // [{role: "assistant"|"user", content: "..."}]
-  let gCurrentQuestion = 0;        // which question was last ASKED (1-10)
+  let gCurrentQuestion = 0;        // which question was last ASKED (1-13)
   let gIsWaitingForReply = false;
   let gCurrentInputType = "text";  // "screenshot"|"chip_select"|"text"|"buttons"|"none"
   let gCurrentSkippable = false;
@@ -29,10 +29,17 @@
   let gDiagnosisJson = null;
   let gListenerProfileId = null;
 
-  // Current result state (for favourite toggling)
+  // Current result state
   let gCurrentGenId = null;
   let gCurrentGenIsFavourite = false;
-  let gDownloadPollTimer = null; // interval ID for download URL polling
+  let gCurrentGenLikeStatus = null;   // null | "liked" | "disliked"
+  let gCurrentGenCreatedAt = null;
+  let gPlaybackTimerInterval = null;
+  let gGenerationPollTimer = null;
+  let gGenerationPollInFlight = false;
+  let gGenerationPollStartedAt = 0;
+  let gPlayerHasFinalAudio = false;
+  let gPlayerPlaybackEnabled = false;
 
   // Generation state (existing flow)
   let gSelectedMoodId = null;
@@ -44,24 +51,239 @@
   let gSongReference = null;
   let gGenre = null;
   let gBpm = null;
+  let gLanguage = "english";
+  let gSurpriseMe = false;
+  let gLoadingNarrationTimer = null;
+  let gLoadingElapsedTimer = null;
+  let gLoadingStartedAtMs = 0;
+  let gAuthBackScreenId = "screenChat";
+  let gCurrentScreenId = null;
 
   const SKIP_TOKEN = "[skipped]";
   const TOTAL_QUESTIONS = 10;
+  const TYPE_CATALOG = {
+    FVPD: { name: "Neon Oracle", description: "Big future-pop vocals, cinematic drops, emotional but explosive." },
+    FVPR: { name: "Arena Pulse", description: "Anthemic hooks, confidence music, modern stadium energy." },
+    FVCD: { name: "Holo Whisper", description: "Airy vocals, synth haze, gentle but transportive." },
+    FVCR: { name: "Chrome Confessional", description: "Clean production, intimate lyrics, sleek and controlled." },
+    FIPD: { name: "Circuit Titan", description: "Aggressive electronic/instrumental force, bass-forward and bold." },
+    FIPR: { name: "Iron Groove", description: "Precision beats, rhythm obsession, engineered momentum." },
+    FICD: { name: "Glass Drift", description: "Ambient textures, experimental calm, dreamy sonic architecture." },
+    FICR: { name: "Metro Minimalist", description: "Sparse, modern, efficient, tasteful and highly curated." },
+    NVPD: { name: "Velvet Prophet", description: "Soulful retro vocals with emotional weight and big feeling." },
+    NVPR: { name: "Anthem Archivist", description: "Classic-era bangers, sing-alongs, timeless crowd energy." },
+    NVCD: { name: "Moonlit Memoir", description: "Warm, sentimental, late-night memory soundtrack." },
+    NVCR: { name: "Cassette Confessor", description: "Honest lyric-first songs, grounded and deeply human." },
+    NIPD: { name: "Analog Storm", description: "Guitar/drum-driven force, raw intensity, old-school fire." },
+    NIPR: { name: "Vinyl Vanguard", description: "Groove purist, craft-focused, timeless instrumental authority." },
+    NICD: { name: "Lo-Fi Stargazer", description: "Soft instrumental nostalgia, dreamy and introspective." },
+    NICR: { name: "Hearth Conductor", description: "Organic, cozy, grounded arrangements; calm and intentional." },
+  };
 
   // ── Helpers ────────────────────────────────────────────────────────
   function show(el) { if (el) el.classList.remove("is-hidden"); }
   function hide(el) { if (el) el.classList.add("is-hidden"); }
 
-  function showLoading(text) {
+  function showLoading(text, opts = {}) {
     const overlay = $("loadingOverlay");
     const t = $("loadingText");
-    if (t) t.textContent = text || "Loading\u2026";
+    const sub = $("loadingSubtext");
+    const eta = $("loadingEta");
+    if (t) t.textContent = text || "Loading…";
+    if (sub) {
+      const subtext = opts.subtext || "";
+      sub.textContent = subtext;
+      if (subtext) show(sub); else hide(sub);
+    }
+    if (eta) {
+      const etaText = opts.eta || "";
+      eta.textContent = etaText;
+      if (etaText) show(eta); else hide(eta);
+    }
     if (overlay) { show(overlay); overlay.setAttribute("aria-hidden", "false"); }
   }
 
   function hideLoading() {
+    stopLoadingNarration();
     const overlay = $("loadingOverlay");
     if (overlay) { hide(overlay); overlay.setAttribute("aria-hidden", "true"); }
+  }
+
+  function stopLoadingNarration() {
+    if (gLoadingNarrationTimer) {
+      clearInterval(gLoadingNarrationTimer);
+      gLoadingNarrationTimer = null;
+    }
+    if (gLoadingElapsedTimer) {
+      clearInterval(gLoadingElapsedTimer);
+      gLoadingElapsedTimer = null;
+    }
+    gLoadingStartedAtMs = 0;
+  }
+
+  function startLoadingNarration(title, steps, etaHint) {
+    stopLoadingNarration();
+    gLoadingStartedAtMs = Date.now();
+
+    const sequence = Array.isArray(steps) && steps.length ? steps : ["Working on it..."];
+    let idx = 0;
+    let currentStep = sequence[0];
+
+    const render = () => {
+      const elapsedSec = Math.max(0, Math.floor((Date.now() - gLoadingStartedAtMs) / 1000));
+      const eta = etaHint || "Usually less than 15 seconds";
+      showLoading(title, {
+        subtext: currentStep,
+        eta: `${eta} • ${elapsedSec}s elapsed`,
+      });
+    };
+
+    const advanceStep = () => {
+      currentStep = sequence[idx % sequence.length];
+      idx += 1;
+      render();
+    };
+
+    advanceStep();
+    gLoadingNarrationTimer = setInterval(advanceStep, 3000);
+    gLoadingElapsedTimer = setInterval(render, 1000);
+  }
+
+  function updateChatProgress(questionNumber) {
+    const fill = $("chatProgressFill");
+    const text = $("chatProgressText");
+    const track = document.querySelector(".chat-progress-track");
+
+    const q = Math.max(0, Math.min(TOTAL_QUESTIONS, Number(questionNumber) || 0));
+    const pct = Math.round((q / TOTAL_QUESTIONS) * 100);
+
+    if (fill) fill.style.width = pct + "%";
+    if (text) text.textContent = `Question ${q} of ${TOTAL_QUESTIONS}`;
+    if (track) track.setAttribute("aria-valuenow", String(q));
+  }
+
+  function clamp01(v, fallback = 0.5) {
+    const n = Number(v);
+    if (!isFinite(n)) return fallback;
+    return Math.max(0, Math.min(1, n));
+  }
+
+  function pct(n) {
+    return Math.round(clamp01(n, 0.5) * 100);
+  }
+
+  function formatSoulSignature(raw) {
+    const clean = String(raw || "").replace(/\s+/g, " ").trim();
+    if (!clean) return "";
+    const words = clean.split(" ");
+    if (words.length <= 95) return clean;
+    return `${words.slice(0, 95).join(" ").trim()}…`;
+  }
+
+  function getTypeMeta(typeCode) {
+    const code = String(typeCode || "").trim().toUpperCase();
+    return TYPE_CATALOG[code] || {
+      name: "Resonance Seeker",
+      description: "Emotion-led taste with balanced sonic curiosity.",
+    };
+  }
+
+  function normalizeListenerTypeCode(profile, diagnosis) {
+    const raw = String(
+      profile?.listener_persona?.listener_mbti_like ||
+      diagnosis?.listener_mbti_like ||
+      ""
+    ).trim().toUpperCase();
+    if (TYPE_CATALOG[raw]) return raw;
+
+    const novelty = clamp01(profile?.discovery_drive, 0.5);
+    const openness = clamp01(profile?.emotional_profile?.emotional_depth, 0.5);
+    const intensity = clamp01(profile?.energy_range?.high, 0.5);
+    const introspection = clamp01(profile?.emotional_profile?.emotional_depth, 0.5);
+
+    const c1 = novelty >= 0.5 ? "F" : "N";
+    const c2 = openness >= 0.5 ? "V" : "I";
+    const c3 = intensity >= 0.5 ? "P" : "C";
+    const c4 = introspection >= 0.5 ? "D" : "R";
+    return `${c1}${c2}${c3}${c4}`;
+  }
+
+  function getVocalFocusDescriptor(profile, typeCode) {
+    const orientation = String(profile?.listening_orientation || "").toLowerCase();
+    const vocals = String(profile?.production_traits?.vocals || "").toLowerCase();
+    const vibes = Array.isArray(profile?.vibe_keywords) ? profile.vibe_keywords.map((v) => String(v).toLowerCase()) : [];
+
+    if (vocals.includes("breathy")) return "Breathy";
+    if (vocals.includes("airy") || vibes.some((v) => v.includes("dream") || v.includes("haze"))) return "Airy";
+    if (vocals.includes("deep") || vibes.some((v) => v.includes("dark") || v.includes("melanch"))) return "Deep";
+    if (orientation === "lyrics" || orientation === "voice") return "Textured";
+    if (typeCode && String(typeCode).charAt(1) === "I") return "Minimal";
+    return "Textured";
+  }
+
+  function getPowerPct(profile, typeCode) {
+    if (String(typeCode || "").charAt(2) === "P") return 82;
+    if (String(typeCode || "").charAt(2) === "C") return 38;
+    return pct(profile?.energy_range?.high || 0.5);
+  }
+
+  function getNostalgiaPct(profile, typeCode) {
+    const code = String(typeCode || "");
+    if (code.charAt(0) === "N") return 78;
+    if (code.charAt(0) === "F") return 34;
+    return pct(profile?.emotional_profile?.emotional_depth || 0.5);
+  }
+
+  function renderTypeCatalog() {
+    const wrap = $("diagTypeCatalog");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    Object.keys(TYPE_CATALOG)
+      .sort()
+      .forEach((code) => {
+        const item = TYPE_CATALOG[code];
+        const row = document.createElement("div");
+        row.className = "diag-type-item";
+
+        const c = document.createElement("div");
+        c.className = "diag-type-item-code";
+        c.textContent = code;
+
+        const n = document.createElement("div");
+        n.className = "diag-type-item-name";
+        n.textContent = item.name;
+
+        const d = document.createElement("div");
+        d.className = "diag-type-item-desc";
+        d.textContent = item.description;
+
+        row.appendChild(c);
+        row.appendChild(n);
+        row.appendChild(d);
+        wrap.appendChild(row);
+      });
+  }
+
+  function openTypeModal() {
+    const modal = $("diagTypeModal");
+    if (!modal) return;
+    show(modal);
+    modal.setAttribute("aria-hidden", "false");
+    document.body.classList.add("modal-open");
+  }
+
+  function closeTypeModal() {
+    const modal = $("diagTypeModal");
+    if (!modal) return;
+    hide(modal);
+    modal.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("modal-open");
+  }
+
+  function setChatProgressVisibility(isVisible) {
+    const progress = document.querySelector(".chat-progress");
+    if (!progress) return;
+    progress.classList.toggle("is-temporarily-hidden", !isVisible);
   }
 
   function msToTime(secs) {
@@ -71,15 +293,153 @@
     return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
   }
 
+  function isGenerationExpired(gen) {
+    if (!gen || !gen.created_at) return false;
+    const createdAt = new Date(gen.created_at);
+    if (Number.isNaN(createdAt.getTime())) return false;
+    return (Date.now() - createdAt.getTime()) > (90 * 60 * 1000);
+  }
+
+  function refreshPlayerTimeline() {
+    const audioEl = $("audioEl");
+    const seek = $("seek");
+    const tCur = $("tCur");
+    const tDur = $("tDur");
+    const timeline = seek ? seek.closest(".timeline") : null;
+    if (!audioEl) return;
+
+    const current = audioEl.currentTime || 0;
+    const duration = isFinite(audioEl.duration) && audioEl.duration > 0 ? audioEl.duration : 0;
+
+    if (tCur) tCur.textContent = msToTime(current);
+
+    if (seek) {
+      seek.classList.toggle("is-stream-locked", !gPlayerHasFinalAudio && gPlayerPlaybackEnabled);
+      seek.classList.toggle("is-expired", !gPlayerPlaybackEnabled);
+      if (duration > 0) {
+        seek.value = String((current / duration) * 100);
+        seek.disabled = !gPlayerPlaybackEnabled;
+      } else {
+        seek.value = "0";
+        seek.disabled = true;
+      }
+    }
+
+    if (timeline) {
+      timeline.classList.toggle("is-stream-locked", !gPlayerHasFinalAudio && gPlayerPlaybackEnabled);
+      timeline.classList.toggle("is-expired", !gPlayerPlaybackEnabled);
+    }
+
+    if (tDur) {
+      if (!gPlayerPlaybackEnabled) {
+        tDur.textContent = "expired";
+      } else if (!gPlayerHasFinalAudio) {
+        tDur.textContent = "stream";
+      } else {
+        tDur.textContent = duration > 0 ? msToTime(duration) : "00:00";
+      }
+    }
+  }
+
+  function copyTextToClipboard(text) {
+    const value = String(text || "");
+    if (!value) return Promise.resolve(false);
+
+    if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+      return navigator.clipboard.writeText(value).then(() => true).catch(() => false);
+    }
+
+    return new Promise((resolve) => {
+      const ta = document.createElement("textarea");
+      ta.value = value;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-9999px";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+
+      let ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch (_e) {
+        ok = false;
+      }
+
+      document.body.removeChild(ta);
+      resolve(ok);
+    });
+  }
+
+  async function shareProfile() {
+    const statusEl = $("diagShareStatus");
+
+    if (statusEl) {
+      statusEl.textContent = "Creating share link...";
+      show(statusEl);
+    }
+    try {
+      const resp = await fetch("/api/profile/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: gUserId,
+          listener_profile_id: gListenerProfileId,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok || !data.share_url) {
+        throw new Error(data.error || "Failed to create share link");
+      }
+      const url = data.share_url;
+      const copied = await copyTextToClipboard(url);
+      if (statusEl) {
+        statusEl.textContent = copied
+          ? "Share link ready. Copied to clipboard."
+          : "Share link ready. Copy might be blocked on this browser.";
+        show(statusEl);
+      }
+    } catch (e) {
+      if (statusEl) {
+        statusEl.textContent = "Could not create share link right now.";
+        show(statusEl);
+      }
+      console.error("Share profile error:", e);
+    }
+  }
+
   function switchScreen(screenId) {
     const screens = [
-      "screenLogin", "screenHome", "screenFavourites", "screenChat", "screenProfile",
-      "screenMood", "screenActivity", "screenExtras", "screenResult",
+      "screenLogin", "screenRegister", "screenHome", "screenFavourites", "screenChat", "screenProfile",
+      "screenPsychProfile",
+      "screenMood", "screenActivity", "screenExtras", "screenGenerating", "screenResult",
     ];
     screens.forEach((id) => {
       const el = $(id);
       if (el) { if (id === screenId) show(el); else hide(el); }
     });
+    gCurrentScreenId = screenId;
+  }
+  // Expose switchScreen globally for psychoacoustic.js
+  window.switchScreen = switchScreen;
+
+  function openAuthScreen(screenId) {
+    if (gCurrentScreenId && gCurrentScreenId !== "screenLogin" && gCurrentScreenId !== "screenRegister") {
+      gAuthBackScreenId = gCurrentScreenId;
+    }
+    if (gCurrentScreenId === "screenResult" && gCurrentGenId) {
+      try { sessionStorage.setItem("_auth_return_gen", String(gCurrentGenId)); } catch (e) {}
+    }
+    switchScreen(screenId);
+  }
+
+  function navigateBackFromAuth() {
+    try { sessionStorage.removeItem("_auth_return_gen"); } catch (e) {}
+    const target = gAuthBackScreenId || "screenChat";
+    switchScreen(target);
+    if (target === "screenChat") initChat();
   }
 
   /** Scroll the chat area to the very bottom so the latest message is visible */
@@ -100,12 +460,17 @@
   function showInputForType(inputType, skippable) {
     gCurrentInputType = inputType;
     gCurrentSkippable = skippable;
+    const activeEl = document.activeElement;
+    if (activeEl && typeof activeEl.blur === "function") activeEl.blur();
 
     hide($("chatInputWrap"));
     hide($("imageUploadWrap"));
     hide($("chipSelectWrap"));
     hide($("buttonSelectWrap"));
+    hide($("multiButtonSelectWrap"));
     hide($("skipWrap"));
+    hide($("pathChoiceWrap"));
+    setChatProgressVisibility(true);
 
     switch (inputType) {
       case "screenshot":
@@ -113,6 +478,7 @@
         break;
       case "chip_select":
         show($("chipSelectWrap"));
+        setChatProgressVisibility(false);
         break;
       case "text":
         show($("chatInputWrap"));
@@ -121,6 +487,9 @@
         break;
       case "buttons":
         show($("buttonSelectWrap"));
+        break;
+      case "multi_buttons":
+        show($("multiButtonSelectWrap"));
         break;
       case "none":
         break;
@@ -183,121 +552,48 @@
     return false;
   }
 
-  async function signInWithGoogle() {
-    if (typeof firebase === "undefined" || !firebase.auth) {
-      alert("Firebase is not configured yet. Please check back later.");
-      return false;
-    }
-
+  /**
+   * Start server-side Google OAuth flow.
+   * The browser returns to "/" with an authenticated session cookie.
+   * @param {string} [redirectDest] - desired post-auth screen
+   */
+  async function signInWithGoogle(redirectDest) {
     try {
-      const provider = new firebase.auth.GoogleAuthProvider();
-      const result = await firebase.auth().signInWithPopup(provider);
-      const idToken = await result.user.getIdToken();
-
-      showLoading("Signing in...");
-      const resp = await fetch("/api/auth/verify-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id_token: idToken }),
-      });
-      const data = await resp.json();
-      hideLoading();
-
-      if (data.ok && data.user) {
-        gIsAuthenticated = true;
-        gCurrentUser = data.user;
-        gUserId = data.user.id;
-        updateHeaderUI();
-        return true;
+      if (redirectDest) {
+        sessionStorage.setItem("_auth_dest", redirectDest);
       } else {
-        alert("Sign-in failed: " + (data.error || "Unknown error"));
-        return false;
+        sessionStorage.removeItem("_auth_dest");
       }
     } catch (e) {
-      hideLoading();
-      console.error("Google sign-in error:", e);
-      if (e.code !== "auth/popup-closed-by-user") {
-        alert("Sign-in error: " + e.message);
-      }
-      return false;
+      // sessionStorage may be unavailable in private mode
     }
+    window.location.href = "/auth/google-signin";
+    return false;
   }
 
   /**
-   * Send a passwordless sign-in link to the user's email via Firebase.
-   * @param {string} email
-   * @returns {Promise<boolean>} true if the email was sent successfully
+   * Validate password strength for email/password auth.
+   * Requires at least 7 characters and at least one digit.
+   * @param {string} password
+   * @returns {boolean}
    */
-  async function sendEmailSignInLink(email) {
-    if (typeof firebase === "undefined" || !firebase.auth) {
-      alert("Firebase is not configured yet. Please check back later.");
-      return false;
-    }
-
-    // Build the redirect URL: back to our app root so completeEmailSignIn() fires
-    const redirectUrl = window.location.origin + "/";
-
-    const actionCodeSettings = {
-      url: redirectUrl,
-      handleCodeInApp: true,
-    };
-
-    try {
-      await firebase.auth().sendSignInLinkToEmail(email, actionCodeSettings);
-      // Save the email in localStorage so we can complete sign-in when they click the link
-      window.localStorage.setItem("emailForSignIn", email);
-      return true;
-    } catch (e) {
-      console.error("Email link send error:", e);
-      const msg = {
-        "auth/invalid-email": "Please enter a valid email address.",
-        "auth/too-many-requests": "Too many attempts. Please wait a moment and try again.",
-        "auth/missing-continue-uri": "Configuration error. Please contact support.",
-        "auth/unauthorized-continue-uri": "This domain is not authorized. Please contact support.",
-      }[e.code] || e.message;
-      showEmailError(msg);
-      return false;
-    }
+  function isValidPassword(password) {
+    return typeof password === "string" && password.length >= 7 && /\d/.test(password);
   }
 
   /**
-   * Check if the current page URL is an email sign-in link and complete the flow.
-   * Called on page load.
-   * @returns {Promise<boolean>} true if sign-in was completed
+   * Verify Firebase ID token with backend and set authenticated UI state.
+   * @param {string} idToken
+   * @returns {Promise<boolean>}
    */
-  async function completeEmailSignIn() {
-    if (typeof firebase === "undefined" || !firebase.auth) return false;
-
-    if (!firebase.auth().isSignInWithEmailLink(window.location.href)) {
-      return false;
-    }
-
-    // Get the email from localStorage (saved when we sent the link)
-    let email = window.localStorage.getItem("emailForSignIn");
-    if (!email) {
-      // User opened the link on a different device — ask for their email
-      email = window.prompt("Please enter your email to confirm sign-in:");
-      if (!email) return false;
-    }
-
+  async function verifyFirebaseTokenWithBackend(idToken) {
     try {
-      showLoading("Signing in...");
-      const result = await firebase.auth().signInWithEmailLink(email, window.location.href);
-      const idToken = await result.user.getIdToken();
-
-      // Verify with our backend
       const resp = await fetch("/api/auth/verify-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id_token: idToken }),
       });
       const data = await resp.json();
-      hideLoading();
-
-      // Clean up
-      window.localStorage.removeItem("emailForSignIn");
-      // Remove the sign-in link params from the URL so it doesn't retrigger
-      window.history.replaceState(null, "", window.location.origin + window.location.pathname);
 
       if (data.ok && data.user) {
         gIsAuthenticated = true;
@@ -307,39 +603,90 @@
         return true;
       }
     } catch (e) {
-      hideLoading();
-      console.error("Email link sign-in error:", e);
-      alert("Sign-in failed: " + (e.message || "The link may have expired. Please request a new one."));
+      console.error("Token verification error:", e);
     }
     return false;
   }
 
-  /** Show an error message below the email form */
-  function showEmailError(msg) {
-    const el = $("emailAuthError");
-    if (el) {
-      el.textContent = msg;
-      show(el);
+  /**
+   * Register or sign in with Firebase email/password auth.
+   * If email is already registered, falls back to sign-in.
+   * @param {string} email
+   * @param {string} password
+   * @returns {Promise<boolean>}
+   */
+  async function loginWithEmail(email, password) {
+    if (typeof firebase === "undefined" || !firebase.auth) {
+      showAuthMsg("loginEmailError", "Firebase is not configured yet. Please check back later.");
+      return false;
     }
-    hide($("emailAuthSuccess"));
+    try {
+      showLoading("Signing in...");
+      const cred = await firebase.auth().signInWithEmailAndPassword(email, password);
+      const idToken = await cred.user.getIdToken();
+      const ok = await verifyFirebaseTokenWithBackend(idToken);
+      hideLoading();
+      if (!ok) { showAuthMsg("loginEmailError", "Authentication failed. Please try again."); return false; }
+      showAuthMsg("loginEmailSuccess", "Signed in successfully.");
+      return true;
+    } catch (e) {
+      hideLoading();
+      console.error("Email login error:", e);
+      const msg = {
+        "auth/invalid-email": "Please enter a valid email address.",
+        "auth/wrong-password": "Incorrect password. Please try again.",
+        "auth/invalid-credential": "Incorrect email or password.",
+        "auth/user-not-found": "No account found for this email. Try registering instead.",
+        "auth/too-many-requests": "Too many attempts. Please wait and try again.",
+      }[e.code] || "Sign-in failed. Please check your details and try again.";
+      showAuthMsg("loginEmailError", msg);
+      return false;
+    }
   }
 
-  /** Show a success message below the email form */
-  function showEmailSuccess(msg) {
-    const el = $("emailAuthSuccess");
-    if (el) {
-      el.textContent = msg;
-      show(el);
+  async function registerWithEmail(email, password) {
+    if (typeof firebase === "undefined" || !firebase.auth) {
+      showAuthMsg("registerEmailError", "Firebase is not configured yet. Please check back later.");
+      return false;
     }
-    hide($("emailAuthError"));
+    try {
+      showLoading("Creating account...");
+      const cred = await firebase.auth().createUserWithEmailAndPassword(email, password);
+      const idToken = await cred.user.getIdToken();
+      const ok = await verifyFirebaseTokenWithBackend(idToken);
+      hideLoading();
+      if (!ok) { showAuthMsg("registerEmailError", "Authentication failed. Please try again."); return false; }
+      showAuthMsg("registerEmailSuccess", "Account created successfully.");
+      return true;
+    } catch (e) {
+      hideLoading();
+      console.error("Email registration error:", e);
+      const msg = {
+        "auth/invalid-email": "Please enter a valid email address.",
+        "auth/weak-password": "Password must be at least 7 characters and include at least 1 number.",
+        "auth/email-already-in-use": "An account with this email already exists. Try logging in instead.",
+        "auth/too-many-requests": "Too many attempts. Please wait and try again.",
+      }[e.code] || "Registration failed. Please check your details and try again.";
+      showAuthMsg("registerEmailError", msg);
+      return false;
+    }
   }
 
-  /** Clear the email form messages */
-  function clearEmailError() {
-    const el = $("emailAuthError");
-    if (el) { el.textContent = ""; hide(el); }
-    const s = $("emailAuthSuccess");
-    if (s) { s.textContent = ""; hide(s); }
+  function showAuthMsg(id, msg) {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = msg;
+    show(el);
+    const isError = id.includes("Error");
+    const sibling = $(id.replace(isError ? "Error" : "Success", isError ? "Success" : "Error"));
+    if (sibling) { sibling.textContent = ""; hide(sibling); }
+  }
+
+  function clearAuthMsgs(prefix) {
+    const err = $(prefix + "Error");
+    if (err) { err.textContent = ""; hide(err); }
+    const suc = $(prefix + "Success");
+    if (suc) { suc.textContent = ""; hide(suc); }
   }
 
   /**
@@ -438,7 +785,7 @@
           }
 
           // Click to open full result
-          if (gen.status === "succeeded" && gen.audio_url) {
+          if (gen.status === "succeeded") {
             item.style.cursor = "pointer";
             item.addEventListener("click", () => {
               renderResultFromGen(gen);
@@ -459,14 +806,15 @@
 
   /** Render result screen from a generation list item */
   function renderResultFromGen(gen) {
-    // Track which generation is currently displayed
     gCurrentGenId = gen.id;
     gCurrentGenIsFavourite = !!gen.is_favourite;
+    gCurrentGenLikeStatus = gen.like_status || null;
+    gCurrentGenCreatedAt = gen.created_at || null;
     updateFavButton();
+    updateLikeButtons();
 
     const moodLabel = $("resultMood");
     const audioEl = $("audioEl");
-    const downloadBtn = $("downloadBtn");
     const coverImg = $("coverImg");
     const resultTitle = document.querySelector(".result-title");
 
@@ -475,34 +823,45 @@
 
     if (coverImg && gen.cover_url) coverImg.src = gen.cover_url;
 
-    // Playback: use audio_url (backend returns stream-preferred URL)
-    if (audioEl && gen.audio_url) {
-      audioEl.src = gen.audio_url;
+    const isExpired = isGenerationExpired(gen);
+    const playbackUrl = isExpired ? null : gen.audio_url;
+    if (audioEl && playbackUrl) {
+      audioEl.src = playbackUrl;
+      audioEl.load();
+    } else if (audioEl) {
+      audioEl.pause();
+      audioEl.removeAttribute("src");
       audioEl.load();
     }
 
-    // Download: only enable with final (non-stream) URL
-    const songTitle = gen.title || "drvibey_track";
-    if (downloadBtn) {
-      if (gen.download_url) {
-        downloadBtn.href = gen.download_url;
-        downloadBtn.download = songTitle + ".mp3";
-        downloadBtn.classList.remove("is-disabled");
-        downloadBtn.setAttribute("aria-disabled", "false");
-        downloadBtn.textContent = "DOWNLOAD";
-      } else {
-        downloadBtn.href = "#";
-        downloadBtn.classList.add("is-disabled");
-        downloadBtn.setAttribute("aria-disabled", "true");
-        downloadBtn.textContent = "DOWNLOAD (processing\u2026)";
-        // Poll for the final URL in the background
-        if (gCurrentGenId) {
-          pollDownloadUrl(gCurrentGenId, songTitle);
-        }
-      }
-    }
+    setupPlayerListeners({ hasFinalAudio: false, canPlay: !!playbackUrl });
+    startPlaybackTimer(gen.created_at);
+    renderSimilarSongs(gen);
+  }
 
-    setupPlayerListeners();
+  async function loadGenerationById(genId) {
+    try {
+      const resp = await fetch("/api/generation/" + genId);
+      const data = await resp.json();
+      if (data.ok && data.status === "succeeded") {
+        gCurrentGenId = genId;
+        gCurrentGenIsFavourite = !!data.is_favourite;
+        gCurrentGenLikeStatus = data.like_status || null;
+        gCurrentGenCreatedAt = data.created_at || null;
+        updateFavButton();
+        updateLikeButtons();
+        renderResult(data.result);
+        startPlaybackTimer(data.created_at);
+        renderSimilarSongs(data.result);
+        switchScreen("screenResult");
+        return;
+      }
+    } catch (e) {
+      console.error("Load generation error:", e);
+    }
+    loadSavedProfile();
+    loadRecentGenerations();
+    switchScreen("screenHome");
   }
 
   // ── Favourites ─────────────────────────────────────────────────────
@@ -520,6 +879,10 @@
   }
 
   async function toggleFavourite() {
+    if (!gIsAuthenticated) {
+      openAuthScreen("screenLogin");
+      return;
+    }
     if (!gCurrentGenId) return;
 
     const newState = !gCurrentGenIsFavourite;
@@ -538,6 +901,139 @@
     } catch (e) {
       console.error("Toggle favourite error:", e);
     }
+  }
+
+  // ── Like / Dislike ────────────────────────────────────────────────
+
+  function updateLikeButtons() {
+    const likeBtn = $("likeBtn");
+    const dislikeBtn = $("dislikeBtn");
+    if (likeBtn) {
+      likeBtn.classList.toggle("is-liked", gCurrentGenLikeStatus === "liked");
+      likeBtn.setAttribute("aria-pressed", gCurrentGenLikeStatus === "liked" ? "true" : "false");
+    }
+    if (dislikeBtn) {
+      dislikeBtn.classList.toggle("is-disliked", gCurrentGenLikeStatus === "disliked");
+      dislikeBtn.setAttribute("aria-pressed", gCurrentGenLikeStatus === "disliked" ? "true" : "false");
+    }
+  }
+
+  async function toggleLike(status) {
+    if (!gIsAuthenticated) {
+      openAuthScreen("screenLogin");
+      return;
+    }
+    if (!gCurrentGenId) return;
+    const newStatus = gCurrentGenLikeStatus === status ? null : status;
+
+    try {
+      const resp = await fetch("/api/generation/" + gCurrentGenId + "/like", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ like_status: newStatus }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        gCurrentGenLikeStatus = data.like_status;
+        updateLikeButtons();
+      }
+    } catch (e) {
+      console.error("Toggle like error:", e);
+    }
+  }
+
+  // ── Similar songs rendering ───────────────────────────────────────
+
+  function renderSimilarSongs(data) {
+    const wrap = $("similarSongs");
+    const list = $("similarSongsList");
+    if (!wrap || !list) return;
+
+    let songs = null;
+    if (data && data.similar_songs) {
+      songs = data.similar_songs;
+    } else if (data && data.result_json && data.result_json.similar_songs) {
+      songs = data.result_json.similar_songs;
+    }
+
+    if (!Array.isArray(songs) || songs.length === 0) {
+      wrap.classList.add("is-hidden");
+      list.innerHTML = "";
+      return;
+    }
+
+    list.innerHTML = "";
+    songs.forEach((s) => {
+      const el = document.createElement("div");
+      el.className = "similar-song-item";
+      const artist = s.artist || "Unknown Artist";
+      const title = s.title || "Unknown Track";
+      el.innerHTML = '<span class="similar-song-note">\u266B</span> ' +
+        '<span class="similar-song-artist">' + artist + '</span>' +
+        ' &mdash; ' +
+        '<span class="similar-song-title">' + title + '</span>';
+      list.appendChild(el);
+    });
+    wrap.classList.remove("is-hidden");
+  }
+
+  // ── Playback countdown timer ──────────────────────────────────────
+
+  function startPlaybackTimer(createdAtStr) {
+    const timerEl = $("playbackTimer");
+    if (!timerEl) return;
+
+    if (gPlaybackTimerInterval) {
+      clearInterval(gPlaybackTimerInterval);
+      gPlaybackTimerInterval = null;
+    }
+
+    if (!createdAtStr) {
+      timerEl.textContent = "";
+      return;
+    }
+
+    const createdAt = new Date(createdAtStr);
+    if (Number.isNaN(createdAt.getTime())) {
+      timerEl.textContent = "";
+      return;
+    }
+
+    const WINDOW_MS = 90 * 60 * 1000;
+
+    function tick() {
+      const remaining = (createdAt.getTime() + WINDOW_MS) - Date.now();
+      if (remaining <= 0) {
+        timerEl.textContent = "Playback expired";
+        timerEl.classList.add("is-expired");
+        if (gPlaybackTimerInterval) {
+          clearInterval(gPlaybackTimerInterval);
+          gPlaybackTimerInterval = null;
+        }
+        // Disable playback live
+        gPlayerPlaybackEnabled = false;
+        const playBtn = $("playPauseBtn");
+        const audioEl = $("audioEl");
+        if (playBtn) {
+          playBtn.disabled = true;
+          playBtn.classList.add("is-disabled");
+          playBtn.textContent = "\u25B6";
+        }
+        if (audioEl && !audioEl.paused) {
+          audioEl.pause();
+        }
+        refreshPlayerTimeline();
+        return;
+      }
+      const mins = Math.floor(remaining / 60000);
+      const secs = Math.floor((remaining % 60000) / 1000);
+      timerEl.textContent = "Playback expires in " +
+        String(mins).padStart(2, "0") + ":" + String(secs).padStart(2, "0");
+      timerEl.classList.remove("is-expired");
+    }
+
+    tick();
+    gPlaybackTimerInterval = setInterval(tick, 1000);
   }
 
   async function loadFavourites() {
@@ -596,7 +1092,7 @@
           item.appendChild(heart);
 
           // Click to open full result
-          if (gen.status === "succeeded" && gen.audio_url) {
+          if (gen.status === "succeeded") {
             item.style.cursor = "pointer";
             item.addEventListener("click", () => {
               renderResultFromGen(gen);
@@ -635,10 +1131,15 @@
     }
 
     if (gProfileJson && gDiagnosisJson) {
-      renderDiagnosis(gProfileJson, gDiagnosisJson);
-      hide($("profileCta"));
-      show($("profileProceedBtn"));
-      switchScreen("screenProfile");
+      // Route to correct profile screen based on profile type
+      if (gProfileJson.profile_type === "psychoacoustic" && window.PsychoacousticTest) {
+        window.PsychoacousticTest.renderResult(gDiagnosisJson);
+      } else {
+        renderDiagnosis(gProfileJson, gDiagnosisJson);
+        hide($("profileCta"));
+        show($("profileProceedBtn"));
+        switchScreen("screenProfile");
+      }
     } else {
       // No profile exists yet — start a session
       alert("No vibe profile found yet. Let\u2019s create one!");
@@ -690,6 +1191,8 @@
     gSelectedArtists.clear();
     gSelectedSongs.clear();
     gExtractedTracks = [];
+    gChatInitData = null;
+    updateChatProgress(0);
 
     // Clear chat messages
     const chatMessages = $("chatMessages");
@@ -700,6 +1203,13 @@
     if (previewRow) previewRow.innerHTML = "";
     hide($("imageCount"));
     hide($("imageSubmitBtn"));
+
+    // Reset psychoacoustic test UI
+    hide($("psychTestWrap"));
+    hide($("pathChoiceWrap"));
+    show(chatMessages);
+    const chatProgress = document.querySelector(".chat-progress");
+    if (chatProgress) chatProgress.classList.remove("is-temporarily-hidden");
 
     switchScreen("screenChat");
     initChat();
@@ -736,6 +1246,8 @@
   }
 
   // ── Chat API calls ─────────────────────────────────────────────────
+  let gChatInitData = null; // cached first-question data for quick path
+
   async function initChat() {
     addTypingIndicator();
 
@@ -750,44 +1262,75 @@
       removeTypingIndicator();
 
       if (data.ok) {
-        gCurrentQuestion = data.question_number; // 1
+        gChatInitData = data; // cache for quick path
 
         if (data.intro) {
           addChatBubble("assistant", data.intro);
           gChatHistory.push({ role: "assistant", content: data.intro });
         }
 
-        const showQ1 = () => {
-          addChatBubble("assistant", data.reply);
-          gChatHistory.push({ role: "assistant", content: data.reply });
-          showInputForType(data.input_type || "screenshot", data.skippable || false);
-        };
-
-        if (data.intro) {
-          addTypingIndicator();
-          setTimeout(() => {
-            removeTypingIndicator();
-            showQ1();
-          }, 800);
-        } else {
-          showQ1();
-        }
+        // Show path choice instead of jumping to Q1
+        addChatBubble("assistant", "Choose your path:");
+        gChatHistory.push({ role: "assistant", content: "Choose your path:" });
+        showInputForType("none", false);
+        show($("pathChoiceWrap"));
       }
     } catch (e) {
       removeTypingIndicator();
       console.error("Chat init error:", e);
       const fallbackIntro = "Hey, I'm drVibey \u2014 your personal music psychologist. I'm here to heal you through the power of music... but first, I need to understand your diagnosis.";
-      const fallbackQ1 = "Drop me 3-10 screenshots of your favorite playlists, most-played songs, or your Year Wrapped from Spotify, Apple Music, YouTube Music \u2014 whatever you use.";
       addChatBubble("assistant", fallbackIntro);
       gChatHistory.push({ role: "assistant", content: fallbackIntro });
-      setTimeout(() => {
-        addChatBubble("assistant", fallbackQ1);
-        gCurrentQuestion = 1;
-        gChatHistory.push({ role: "assistant", content: fallbackQ1 });
-        showInputForType("screenshot", false);
-      }, 800);
+      addChatBubble("assistant", "Choose your path:");
+      gChatHistory.push({ role: "assistant", content: "Choose your path:" });
+      showInputForType("none", false);
+      show($("pathChoiceWrap"));
     }
   }
+
+  function startQuickAnalysis() {
+    hide($("pathChoiceWrap"));
+    addChatBubble("user", "Quick Analysis");
+    gChatHistory.push({ role: "user", content: "Quick Analysis" });
+
+    // Use cached init data to show Q1
+    const data = gChatInitData;
+    if (data) {
+      gCurrentQuestion = data.question_number;
+      updateChatProgress(gCurrentQuestion);
+      addChatBubble("assistant", data.reply);
+      gChatHistory.push({ role: "assistant", content: data.reply });
+      showInputForType(data.input_type || "screenshot", data.skippable || false);
+    } else {
+      // Fallback if no cached data
+      const fallbackQ1 = "Drop me 3-10 screenshots of your favorite playlists, most-played songs, or your Year Wrapped from Spotify, Apple Music, YouTube Music \u2014 whatever you use.";
+      gCurrentQuestion = 1;
+      updateChatProgress(gCurrentQuestion);
+      addChatBubble("assistant", fallbackQ1);
+      gChatHistory.push({ role: "assistant", content: fallbackQ1 });
+      showInputForType("screenshot", false);
+    }
+  }
+
+  function startFullTest() {
+    hide($("pathChoiceWrap"));
+    addChatBubble("user", "The Full Test");
+    gChatHistory.push({ role: "user", content: "The Full Test" });
+    addChatBubble("assistant", "Excellent choice. Let's dive deep into your psychoacoustic profile. You'll hear pairs of audio clips and answer some questions about your preferences. Take your time \u2014 there are no wrong answers.");
+    gChatHistory.push({ role: "assistant", content: "Excellent choice. Let's dive deep..." });
+
+    // Start the psychoacoustic test
+    if (window.PsychoacousticTest) {
+      window.PsychoacousticTest.start();
+    }
+  }
+
+  // Expose for psychoacoustic.js to set profile data after submission
+  window.setPsychProfileData = function (data) {
+    gListenerProfileId = data.listener_profile_id;
+    gProfileJson = data.profile;
+    gDiagnosisJson = data.diagnosis;
+  };
 
   /** Send a user answer (text, skip, chip picks, or button pick) and advance */
   async function sendUserAnswer(text) {
@@ -806,6 +1349,7 @@
 
     if (gCurrentQuestion >= TOTAL_QUESTIONS) {
       gIsWaitingForReply = false;
+      updateChatProgress(TOTAL_QUESTIONS);
       addChatBubble("assistant", "Got it! Let me build your musical DNA...");
       gChatHistory.push({ role: "assistant", content: "Got it! Let me build your musical DNA..." });
       await buildProfile();
@@ -833,11 +1377,15 @@
         }
 
         gCurrentQuestion = data.question_number;
+        updateChatProgress(gCurrentQuestion);
         addChatBubble("assistant", data.reply);
         gChatHistory.push({ role: "assistant", content: data.reply });
 
         if (data.input_type === "buttons" && data.button_options) {
           renderButtonOptions(data.button_options);
+        }
+        if (data.input_type === "multi_buttons" && data.button_groups) {
+          renderMultiButtonOptions(data.button_groups);
         }
         showInputForType(data.input_type, data.skippable || false);
       } else {
@@ -909,7 +1457,15 @@
   async function submitScreenshots() {
     if (gSelectedFiles.length < 3) return;
 
-    showLoading("Analyzing your playlists...");
+    startLoadingNarration(
+      "Analyzing your screenshots...",
+      [
+        "Reading track names from your playlists",
+        "Matching duplicate songs and artists",
+        "Extracting style clues for better prompt matching",
+      ],
+      "Usually less than 15 seconds"
+    );
     hide($("imageSubmitBtn"));
 
     const formData = new FormData();
@@ -933,6 +1489,7 @@
         if (data.next_question) {
           const q2 = data.next_question;
           gCurrentQuestion = q2.question_number; // 2
+          updateChatProgress(gCurrentQuestion);
           gChipOptions = q2.chip_options || { artists: [], songs: [] };
 
           addChatBubble("assistant", q2.reply);
@@ -1039,10 +1596,12 @@
     sendUserAnswer(text);
   }
 
-  // ── Button select (Q9/Q10) ─────────────────────────────────────────
+  // ── Button select (Q4–Q9) ──────────────────────────────────────────
   function renderButtonOptions(options) {
     const container = $("buttonOptions");
     if (!container) return;
+    const activeEl = document.activeElement;
+    if (activeEl && typeof activeEl.blur === "function") activeEl.blur();
 
     container.innerHTML = "";
 
@@ -1052,15 +1611,70 @@
       btn.className = "option-btn";
       btn.textContent = label;
       btn.addEventListener("click", () => {
+        btn.blur();
         sendUserAnswer(label);
       });
       container.appendChild(btn);
     });
   }
 
+  // ── Multi-button select (Q10 personality triptych) ─────────────────
+  function renderMultiButtonOptions(groups) {
+    const container = $("multiButtonOptions");
+    if (!container) return;
+    const activeEl = document.activeElement;
+    if (activeEl && typeof activeEl.blur === "function") activeEl.blur();
+
+    container.innerHTML = "";
+    const selections = {};
+
+    groups.forEach((group) => {
+      const row = document.createElement("div");
+      row.className = "multi-btn-group";
+
+      const label = document.createElement("div");
+      label.className = "multi-btn-label";
+      label.textContent = group.label;
+      row.appendChild(label);
+
+      const btnRow = document.createElement("div");
+      btnRow.className = "multi-btn-row";
+
+      group.options.forEach((opt) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "option-btn";
+        btn.textContent = opt;
+        btn.addEventListener("click", () => {
+          btn.blur();
+          btnRow.querySelectorAll(".option-btn").forEach((b) => b.classList.remove("option-btn-selected"));
+          btn.classList.add("option-btn-selected");
+          selections[group.dimension] = opt;
+
+          if (Object.keys(selections).length === groups.length) {
+            const answer = groups.map((g) => selections[g.dimension]).join(" | ");
+            sendUserAnswer(answer);
+          }
+        });
+        btnRow.appendChild(btn);
+      });
+
+      row.appendChild(btnRow);
+      container.appendChild(row);
+    });
+  }
+
   // ── Profile synthesis ──────────────────────────────────────────────
   async function buildProfile() {
-    showLoading("Building your musical DNA...");
+    startLoadingNarration(
+      "Building your musical DNA...",
+      [
+        "Mapping your emotional triggers to sound design",
+        "Prioritizing your selected favorite songs and artists",
+        "Finalizing your listener personality and style blueprint",
+      ],
+      "Usually less than 15 seconds"
+    );
 
     try {
       const resp = await fetch("/api/chat/build-profile", {
@@ -1080,16 +1694,16 @@
         gProfileJson = data.profile;
         gDiagnosisJson = data.diagnosis;
         gListenerProfileId = data.listener_profile_id;
+        updateChatProgress(TOTAL_QUESTIONS);
 
         renderDiagnosis(data.profile, data.diagnosis);
 
-        // If already authenticated, hide signup CTA, show proceed button
+        // Always allow proceeding to generation after profile build.
+        show($("profileProceedBtn"));
         if (gIsAuthenticated) {
           hide($("profileCta"));
-          show($("profileProceedBtn"));
         } else {
           show($("profileCta"));
-          hide($("profileProceedBtn"));
         }
 
         switchScreen("screenProfile");
@@ -1106,64 +1720,141 @@
 
   // ── Diagnosis rendering ────────────────────────────────────────────
   function renderDiagnosis(profile, diagnosis) {
+    const typeEl = $("diagType");
+    const typeNameEl = $("diagTypeName");
+    const typeDescEl = $("diagTypeDesc");
     const archEl = $("diagArchetype");
+    const soulEl = $("diagSoul");
     const textEl = $("diagText");
-    const dimEl = $("diagDimensions");
+    const statsEl = $("diagStats");
+    const vocalFocusEl = $("diagVocalFocus");
     const genresEl = $("diagGenres");
     const artistsEl = $("diagArtists");
+    const suggestedArtistsEl = $("diagSuggestedArtists");
+    const avatarImgEl = $("diagAvatarImg");
+    const avatarFallbackEl = $("diagAvatarFallback");
 
-    if (archEl) archEl.textContent = diagnosis.archetype || "The Music Lover";
-    if (textEl) textEl.textContent = diagnosis.diagnosis_text || profile.summary || "";
+    const listenerType = normalizeListenerTypeCode(profile, diagnosis);
+    const typeMeta = getTypeMeta(listenerType);
+    if (typeEl) typeEl.textContent = listenerType;
+    if (typeNameEl) typeNameEl.textContent = typeMeta.name;
+    if (typeDescEl) {
+      typeDescEl.textContent = "";
+      hide(typeDescEl);
+    }
 
-    if (dimEl) {
-      dimEl.innerHTML = "";
-      const dimensions = [
-        {
-          label: "Emotional Depth",
-          value: (profile.emotional_profile && profile.emotional_profile.emotional_depth) || 0.5,
-        },
-        { label: "Discovery Drive", value: profile.discovery_drive || 0.5 },
-        {
-          label: "Energy Range",
-          value: (profile.energy_range && profile.energy_range.high) || 0.5,
-        },
+    const soulSignature = profile?.soul_signature || "";
+    if (soulEl) {
+      const shortSoul = formatSoulSignature(soulSignature);
+      if (shortSoul) {
+        soulEl.innerHTML = "";
+        const soulTitle = document.createElement("div");
+        soulTitle.className = "diagnosis-soul-title";
+        soulTitle.textContent = "Soul Signature";
+
+        const soulBody = document.createElement("div");
+        soulBody.className = "diagnosis-soul-body";
+        soulBody.textContent = shortSoul;
+
+        soulEl.appendChild(soulTitle);
+        soulEl.appendChild(soulBody);
+        show(soulEl);
+      } else {
+        soulEl.innerHTML = "";
+        hide(soulEl);
+      }
+    }
+
+    if (archEl) {
+      archEl.textContent = "";
+      hide(archEl);
+    }
+    if (textEl) {
+      textEl.textContent = "";
+      hide(textEl);
+    }
+
+    const avatarUrl = (profile && profile.profile_avatar_url) || "";
+    if (avatarImgEl && avatarFallbackEl) {
+      avatarImgEl.onerror = () => {
+        avatarImgEl.removeAttribute("src");
+        hide(avatarImgEl);
+        show(avatarFallbackEl);
+      };
+      if (avatarUrl) {
+        avatarImgEl.src = avatarUrl;
+        show(avatarImgEl);
+        hide(avatarFallbackEl);
+      } else {
+        avatarImgEl.removeAttribute("src");
+        hide(avatarImgEl);
+        show(avatarFallbackEl);
+      }
+    }
+
+    if (statsEl) {
+      statsEl.innerHTML = "";
+      const stats = [
+        { label: "Emotional Depth", value: pct(profile?.emotional_profile?.emotional_depth || 0.5) },
+        { label: "Curiosity", value: pct(profile?.discovery_drive || 0.5) },
+        { label: "Power", value: getPowerPct(profile, listenerType) },
+        { label: "Nostalgia Level", value: getNostalgiaPct(profile, listenerType) },
       ];
 
-      dimensions.forEach((dim) => {
+      stats.forEach((stat) => {
         const row = document.createElement("div");
-        row.className = "dimension-row";
+        row.className = "diag-stat-row";
 
-        const label = document.createElement("span");
-        label.className = "dimension-label";
-        label.textContent = dim.label;
+        const label = document.createElement("div");
+        label.className = "diag-stat-label";
+        label.textContent = stat.label;
 
-        const barWrap = document.createElement("div");
-        barWrap.className = "dimension-bar-wrap";
+        const track = document.createElement("div");
+        track.className = "diag-stat-track";
 
-        const bar = document.createElement("div");
-        bar.className = "dimension-bar";
-        bar.style.width = Math.round(dim.value * 100) + "%";
+        const fill = document.createElement("div");
+        fill.className = "diag-stat-fill";
+        fill.style.width = `${stat.value}%`;
+        track.appendChild(fill);
 
-        const pct = document.createElement("span");
-        pct.className = "dimension-pct";
-        pct.textContent = Math.round(dim.value * 100) + "%";
+        const value = document.createElement("div");
+        value.className = "diag-stat-value";
+        value.textContent = `${stat.value}%`;
 
-        barWrap.appendChild(bar);
         row.appendChild(label);
-        row.appendChild(barWrap);
-        row.appendChild(pct);
-        dimEl.appendChild(row);
+        row.appendChild(track);
+        row.appendChild(value);
+        statsEl.appendChild(row);
       });
     }
 
+    if (vocalFocusEl) {
+      const descriptor = getVocalFocusDescriptor(profile, listenerType);
+      vocalFocusEl.innerHTML = "<strong>Vocal Focus:</strong> <span class=\"diagnosis-vocal-badge\"></span>";
+      const badge = vocalFocusEl.querySelector(".diagnosis-vocal-badge");
+      if (badge) badge.textContent = descriptor;
+      show(vocalFocusEl);
+    }
+
     if (genresEl && profile.dominant_genres && profile.dominant_genres.length) {
-      genresEl.innerHTML = "<strong>Genres:</strong> " +
+      genresEl.innerHTML = "<strong>Style Favs:</strong> " +
         profile.dominant_genres.concat(profile.subgenres || []).join(", ");
     }
 
     if (artistsEl && profile.identity_artists && profile.identity_artists.length) {
       artistsEl.innerHTML = "<strong>Core Artists:</strong> " +
         profile.identity_artists.join(", ");
+    }
+
+    if (suggestedArtistsEl) {
+      if (profile.suggested_artists && profile.suggested_artists.length) {
+        suggestedArtistsEl.innerHTML = "<strong>Suggested Artists:</strong> " +
+          profile.suggested_artists.join(", ");
+        show(suggestedArtistsEl);
+      } else {
+        suggestedArtistsEl.textContent = "";
+        hide(suggestedArtistsEl);
+      }
     }
   }
 
@@ -1207,10 +1898,228 @@
   }
 
   // ── Generate pipeline ──────────────────────────────────────────────
-  async function handleGenerate() {
-    showLoading("Generating your track...\n(20 - 30 seconds on average.)");
+  let gGeneratingStepInterval = null;
+  let gGeneratingElapsedTimer = null;
+  let gGeneratingStartedAtMs = 0;
 
+  function stopGenerationPolling() {
+    if (gGenerationPollTimer) {
+      clearTimeout(gGenerationPollTimer);
+      gGenerationPollTimer = null;
+    }
+    gGenerationPollInFlight = false;
+    gGenerationPollStartedAt = 0;
+  }
+
+  // ── Vibe toast messages during generation ─────────────────────────
+  let gVibeToastTimer = null;
+  let gVibeToastShownIdxs = [];
+
+  const VIBE_GENERIC_MESSAGES = [
+    "🎵 We’re tuning this to your brainwaves. Give us a sec",
+    "🔥 Your taste is illegal in 12 countries. We’re cooking anyway",
+    "🎧 You have “one more song” energy. We respect it deeply",
+    "💜 Whatever today did to you, this track is about to undo it",
+    "🎶 Congrats: you escaped the mainstream. We locked the door behind you",
+    "✨ Mixing serotonin with a hint of menace. Stand by, bestie",
+    "🧬 Your music DNA is rare. We’re handling it with gloves and pride",
+    "🫶 If you cry to this, it’s not drama— it’s deluxe emotional range",
+    "💿 A Spotify algorithm just felt a disturbance. That was you",
+    "🎸 Consider this your personal entrée. Dessert is the drop 🍽️",
+    "🌟 Your vibe made the AI sit up straight. Now it’s performing",
+    "🎤 People who listen like YOU are the plot. Main character confirmed",
+    "🫠 This wait is shorter than your “what should I play” spiral. Promise",
+    "💫 Patience looks good on you. Great taste looks better",
+    "🎵 Plot twist: the track is almost done. The drama is optional",
+    "🧠 Dopamine delivery in progress. Signature required: one head nod 💅",
+    "🎧 Future you is already replaying this. Present you just has to wait",
+    "🌈 Stitching your vibe into bass, glitter, and a tiny bit of chaos 🎶",
+    "🫡 Respect for not letting TikTok DJ your entire personality",
+    "💜 drVibey diagnosis: you’re a FEELER with premium audio settings",
+    "🔮 We peeked into your music soul… it’s cozy in there. Immaculate",
+    "🎤 Somewhere, an AI vocalist is warming up for YOU. Iconic behavior",
+    "🥹 Caring this much about music is elite behavior. Case closed",
+    "🧊 Stay cool— your track is being forged like a legendary weapon",
+    "🎵 If your taste was a spice, it’s the one that makes chefs nervous",
+    "💃 Warning: your body may start moving without asking permission",
+    "🌙 2am playlist energy? 8am commute energy? Either way, you’re served",
+    "🎹 Beethoven waited years. You’re waiting seconds. We love progress",
+  ];
+
+  const VIBE_ARTIST_TEMPLATES = [
+    "🔥 Liking {artist} is a green flag. Our notes are: none",
+    "💜 {artist} walked so your custom track could sprint in platform boots 🏃‍♂️",
+    "🎧 If {artist} heard this, they'd do that little nod. You know the one",
+    "💿 Your {artist} love is basically a personality trait. We salute it 🤝",
+    "🎸 {artist} fans are mysteriously cooler. Scientific? No. True? Yes",
+    "✨ {artist} fans don’t listen— they *feel*. You’re one of them",
+    "🫶 Thanks to {artist}, your standards are unreasonably high. We'll cope",
+    "🧬 Not an obsession with {artist}… a lifestyle subscription. Respect",
+    "🎤 {artist} would be proud of you for this pick. Somehow. Don’t ask",
+    "🔮 Injecting a lil {artist} energy into this. Side effects: replaying 👀",
+  ];
+
+  const VIBE_GENRE_TEMPLATES = [
+    "🎶 Your {genre} heart is about to be FED. Plates out",
+    "🧠 Your brain on {genre}: instantly smoother. Doctors hate this trick",
+    "🌊 {genre} + AI + you = a small event in the music universe 🌍",
+    "💜 Another {genre} lover? Come in bestie, we kept the aux warm 🫂",
+    "🔥 {genre} isn’t a genre for you— it’s home. We built you a room 👁️",
+  ];
+
+  const VIBE_ARCHETYPE_TEMPLATES = [
+    "✨ A {archetype}? That’s main-character listener energy. Certified",
+    "🫶 Being a {archetype} means you feel things in HD. Respectfully",
+    "🔮 {archetype} detected. We’re making this extra personal on purpose",
+    "💫 Only a {archetype} would vibe this hard. You’re built different 😌",
+  ];
+
+  const VIBE_CEO_MESSAGE = "💎 Add CEO on DS, he's a cutie: @angelvoize 💎";
+
+  function buildVibeMessagePool() {
+    const pool = [...VIBE_GENERIC_MESSAGES];
+
+    const artists = gProfileJson?.identity_artists;
+    if (Array.isArray(artists) && artists.length > 0) {
+      for (const tpl of VIBE_ARTIST_TEMPLATES) {
+        const a = artists[Math.floor(Math.random() * artists.length)];
+        pool.push(tpl.replace("{artist}", a));
+      }
+    }
+
+    const genres = gProfileJson?.dominant_genres;
+    if (Array.isArray(genres) && genres.length > 0) {
+      for (const tpl of VIBE_GENRE_TEMPLATES) {
+        const g = genres[Math.floor(Math.random() * genres.length)];
+        pool.push(tpl.replace("{genre}", g));
+      }
+    }
+
+    const typeCode = gProfileJson?.listener_persona?.listener_mbti_like;
+    const archetype = typeCode && TYPE_CATALOG[typeCode]
+      ? TYPE_CATALOG[typeCode].name
+      : gDiagnosisJson?.archetype;
+    if (archetype) {
+      for (const tpl of VIBE_ARCHETYPE_TEMPLATES) {
+        pool.push(tpl.replace("{archetype}", archetype));
+      }
+    }
+
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    return pool;
+  }
+
+  function startVibeToasts() {
+    stopVibeToasts();
+    const zone = $("vibeToastZone");
+    if (!zone) return;
+
+    const pool = buildVibeMessagePool();
+    let idx = 0;
+    let toastCount = 0;
+
+    function showNext() {
+      if (idx >= pool.length) idx = 0;
+
+      toastCount++;
+      // ~5% chance for CEO message, but not on the first toast and not twice in a row
+      const isCeoRoll = toastCount > 1 && Math.random() < 0.05;
+      const msg = isCeoRoll ? VIBE_CEO_MESSAGE : pool[idx++];
+
+      const prev = zone.querySelector(".vibe-toast");
+      if (prev) {
+        prev.classList.add("vibe-toast-out");
+        setTimeout(() => prev.remove(), 350);
+      }
+
+      setTimeout(() => {
+        const el = document.createElement("div");
+        el.className = "vibe-toast";
+        el.textContent = msg;
+        zone.appendChild(el);
+      }, prev ? 380 : 0);
+
+      gVibeToastTimer = setTimeout(showNext, 5000);
+    }
+
+    gVibeToastTimer = setTimeout(showNext, 3000);
+  }
+
+  function stopVibeToasts() {
+    if (gVibeToastTimer) {
+      clearTimeout(gVibeToastTimer);
+      gVibeToastTimer = null;
+    }
+    const zone = $("vibeToastZone");
+    if (zone) zone.innerHTML = "";
+  }
+
+  function startGeneratingScreen() {
+    if (!$("screenGenerating")) {
+      showLoading("Generating your track…");
+      return;
+    }
+    const steps = [
+      "Reading your musical DNA…",
+      "Picking the right vibe…",
+      "Composing your track…",
+      "Rendering audio…",
+      "Almost there…",
+    ];
+    const stepEl = $("generatingStep");
+    const contextEl = $("generatingContext");
+    const elapsedEl = $("generatingElapsed");
+    if (contextEl) {
+      const parts = [];
+      if (gSelectedMoodLabel) parts.push(gSelectedMoodLabel);
+      if (gSelectedActivityLabel) parts.push(gSelectedActivityLabel);
+      contextEl.textContent = parts.length ? parts.join(" · ") : "";
+      contextEl.classList.toggle("is-hidden", parts.length === 0);
+    }
+    let i = 0;
+    if (stepEl) stepEl.textContent = steps[0];
+    gGeneratingStartedAtMs = Date.now();
+    const renderElapsed = () => {
+      if (!elapsedEl || !gGeneratingStartedAtMs) return;
+      const elapsedSec = Math.max(0, Math.floor((Date.now() - gGeneratingStartedAtMs) / 1000));
+      elapsedEl.textContent = `${elapsedSec}s elapsed`;
+    };
+    renderElapsed();
+    if (gGeneratingElapsedTimer) clearInterval(gGeneratingElapsedTimer);
+    gGeneratingElapsedTimer = setInterval(renderElapsed, 1000);
+    if (gGeneratingStepInterval) clearInterval(gGeneratingStepInterval);
+    gGeneratingStepInterval = setInterval(() => {
+      i = (i + 1) % steps.length;
+      if (stepEl) stepEl.textContent = steps[i];
+    }, 6000);
+    switchScreen("screenGenerating");
+    startVibeToasts();
+  }
+
+  function stopGeneratingScreen() {
+    stopGenerationPolling();
+    stopVibeToasts();
+    if (gGeneratingStepInterval) {
+      clearInterval(gGeneratingStepInterval);
+      gGeneratingStepInterval = null;
+    }
+    if (gGeneratingElapsedTimer) {
+      clearInterval(gGeneratingElapsedTimer);
+      gGeneratingElapsedTimer = null;
+    }
+    gGeneratingStartedAtMs = 0;
+    const elapsedEl = $("generatingElapsed");
+    if (elapsedEl) elapsedEl.textContent = "";
+    hideLoading();
+  }
+
+  async function handleGenerate() {
     try {
+      startGeneratingScreen();
+
       const resp = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1223,17 +2132,19 @@
           song_reference: gSongReference,
           genre: gGenre,
           bpm: gBpm,
+          language: gLanguage,
+          surprise_me: gSurpriseMe,
         }),
       });
 
       const data = await resp.json();
 
       if (!resp.ok && resp.status === 403) {
-        hideLoading();
+        stopGeneratingScreen();
         // User needs to sign in first
         const confirmed = confirm("You need to sign in to generate music. Sign in now?");
         if (confirmed) {
-          const success = await signInWithGoogle();
+          const success = await signInWithGoogle("generate");
           if (success) {
             // Retry generation
             handleGenerate();
@@ -1248,37 +2159,72 @@
         throw new Error(data.error || "Generation failed to start");
       }
     } catch (e) {
+      stopGeneratingScreen();
+      switchScreen("screenExtras");
       console.error(e);
       alert("Failed to start generation: " + e.message);
-      hideLoading();
     }
   }
 
   function pollGeneration(genId) {
-    const interval = setInterval(async () => {
+    stopGenerationPolling();
+    gGenerationPollStartedAt = Date.now();
+
+    function nextPollDelayMs() {
+      const elapsedMs = Date.now() - gGenerationPollStartedAt;
+      if (elapsedMs < 30000) return 1000;
+      if (elapsedMs < 120000) return 2000;
+      return 3000;
+    }
+
+    function scheduleNextPoll(delayMs) {
+      gGenerationPollTimer = setTimeout(runPoll, delayMs ?? nextPollDelayMs());
+    }
+
+    async function runPoll() {
+      if (gGenerationPollInFlight) {
+        scheduleNextPoll(250);
+        return;
+      }
+
+      gGenerationPollInFlight = true;
       try {
         const resp = await fetch("/api/generation/" + genId);
         const data = await resp.json();
 
-        if (!data.ok) return;
+        if (!data.ok) {
+          scheduleNextPoll();
+          return;
+        }
 
         if (data.status === "succeeded") {
-          clearInterval(interval);
-          hideLoading();
+          stopGeneratingScreen();
           gCurrentGenId = genId;
           gCurrentGenIsFavourite = false;
+          gCurrentGenLikeStatus = null;
+          gCurrentGenCreatedAt = new Date().toISOString();
           updateFavButton();
+          updateLikeButtons();
           renderResult(data.result);
+          startPlaybackTimer(gCurrentGenCreatedAt);
+          renderSimilarSongs(data.result);
           switchScreen("screenResult");
         } else if (data.status === "failed") {
-          clearInterval(interval);
-          hideLoading();
+          stopGeneratingScreen();
+          switchScreen("screenMood");
           alert("Generation failed: " + (data.error || "Unknown error"));
+        } else {
+          scheduleNextPoll();
         }
       } catch (e) {
         console.error("Polling error", e);
+        scheduleNextPoll();
+      } finally {
+        gGenerationPollInFlight = false;
       }
-    }, 3000);
+    }
+
+    runPoll();
   }
 
   function renderResult(resultJson) {
@@ -1304,150 +2250,152 @@
 
     const moodLabel = $("resultMood");
     const audioEl = $("audioEl");
-    const downloadBtn = $("downloadBtn");
     const coverImg = $("coverImg");
     const resultTitle = document.querySelector(".result-title");
 
     if (resultTitle && song.title) resultTitle.textContent = song.title;
     if (moodLabel) moodLabel.textContent = "Mood: " + (gSelectedMoodLabel || gSelectedMoodId || "\u2014");
 
-    // Playback URL: prefer stream (plays immediately) then final
     const streamUrl = song.streamAudioUrl || song.sourceStreamAudioUrl ||
       song.stream_audio_url || song.source_stream_audio_url || "";
-    const finalUrl = song.audioUrl || song.sourceAudioUrl ||
-      song.audio_url || song.source_audio_url || "";
-    const playbackUrl = streamUrl || finalUrl;
+    const playbackUrl = streamUrl;
 
-    if (audioEl && playbackUrl) { audioEl.src = playbackUrl; audioEl.load(); }
-
-    // Download button: only enable with final (non-stream) URL
-    const songTitle = song.title || "drvibey_track";
-    if (downloadBtn) {
-      if (finalUrl) {
-        downloadBtn.href = finalUrl;
-        downloadBtn.download = songTitle + ".mp3";
-        downloadBtn.classList.remove("is-disabled");
-        downloadBtn.setAttribute("aria-disabled", "false");
-        downloadBtn.textContent = "DOWNLOAD";
-      } else {
-        downloadBtn.href = "#";
-        downloadBtn.classList.add("is-disabled");
-        downloadBtn.setAttribute("aria-disabled", "true");
-        downloadBtn.textContent = "DOWNLOAD (processing\u2026)";
-        // Poll for the final URL in the background
-        if (gCurrentGenId) {
-          pollDownloadUrl(gCurrentGenId, songTitle);
-        }
-      }
+    if (audioEl && playbackUrl) {
+      audioEl.src = playbackUrl;
+      audioEl.load();
+    } else if (audioEl) {
+      audioEl.pause();
+      audioEl.removeAttribute("src");
+      audioEl.load();
     }
 
     const imageUrl = song.imageUrl || song.sourceImageUrl || song.image_url || song.source_image_url || "";
     if (coverImg && imageUrl) coverImg.src = imageUrl;
 
-    setupPlayerListeners();
+    setupPlayerListeners({ hasFinalAudio: false, canPlay: !!playbackUrl });
   }
 
-  /**
-   * Poll GET /api/generation/<id>/download-url every 10s until the final
-   * MP3 URL is available, then enable the download button.
-   * Stops after 18 attempts (~3 minutes) or when the user navigates away.
-   */
-  function pollDownloadUrl(genId, songTitle) {
-    // Clear any previous poll
-    if (gDownloadPollTimer) {
-      clearInterval(gDownloadPollTimer);
-      gDownloadPollTimer = null;
-    }
-
-    let attempts = 0;
-    const maxAttempts = 18;
-
-    gDownloadPollTimer = setInterval(async () => {
-      attempts++;
-
-      // Stop if user navigated to a different generation
-      if (gCurrentGenId !== genId) {
-        clearInterval(gDownloadPollTimer);
-        gDownloadPollTimer = null;
-        return;
-      }
-
-      try {
-        const resp = await fetch("/api/generation/" + genId + "/download-url");
-        const data = await resp.json();
-
-        if (data.ok && data.download_url) {
-          clearInterval(gDownloadPollTimer);
-          gDownloadPollTimer = null;
-
-          const downloadBtn = $("downloadBtn");
-          if (downloadBtn) {
-            downloadBtn.href = data.download_url;
-            downloadBtn.download = (songTitle || "drvibey_track") + ".mp3";
-            downloadBtn.classList.remove("is-disabled");
-            downloadBtn.setAttribute("aria-disabled", "false");
-            downloadBtn.textContent = "DOWNLOAD";
-          }
-          return;
-        }
-      } catch (e) {
-        console.error("Download URL poll error:", e);
-      }
-
-      if (attempts >= maxAttempts) {
-        clearInterval(gDownloadPollTimer);
-        gDownloadPollTimer = null;
-      }
-    }, 10000);
-  }
-
-  function setupPlayerListeners() {
+  function setupPlayerListeners(options) {
     const audioEl = $("audioEl");
     const playPauseBtn = $("playPauseBtn");
     const seek = $("seek");
-    const tCur = $("tCur");
-    const tDur = $("tDur");
 
     if (!audioEl) return;
+    const hasFinalAudio = !!(options && options.hasFinalAudio);
+    const canPlay = !!(options && options.canPlay);
+    gPlayerHasFinalAudio = hasFinalAudio;
+    gPlayerPlaybackEnabled = canPlay;
 
-    function updateTimes() {
-      if (tCur) tCur.textContent = msToTime(audioEl.currentTime || 0);
-      if (tDur && isFinite(audioEl.duration)) tDur.textContent = msToTime(audioEl.duration || 0);
-      if (seek && isFinite(audioEl.duration) && audioEl.duration > 0) {
-        seek.value = String((audioEl.currentTime / audioEl.duration) * 100);
-      }
+    if (!audioEl.dataset.playerBound) {
+      audioEl.addEventListener("timeupdate", refreshPlayerTimeline);
+      audioEl.addEventListener("loadedmetadata", refreshPlayerTimeline);
+
+      // When the browser learns the full duration, the audio is fully available
+      audioEl.addEventListener("durationchange", () => {
+        if (isFinite(audioEl.duration) && audioEl.duration > 0) {
+          gPlayerHasFinalAudio = true;
+        }
+        refreshPlayerTimeline();
+      });
+
+      audioEl.addEventListener("ended", () => {
+        const btn = $("playPauseBtn");
+        if (btn) btn.textContent = "\u25B6";
+        gPlayerHasFinalAudio = true;
+        // Full reload so mobile browsers can replay stream URLs
+        const src = audioEl.getAttribute("src") || audioEl.src;
+        if (src && src !== "#") {
+          audioEl.src = src;
+          audioEl.load();
+        }
+        refreshPlayerTimeline();
+      });
+
+      // Handle stream dropping (Suno stream can break when generation finalises)
+      audioEl.addEventListener("error", () => {
+        if (!gPlayerPlaybackEnabled) return;
+        const src = audioEl.getAttribute("src") || audioEl.src;
+        if (!src || src === "" || src === "#") return;
+        console.warn("Audio error — attempting reload of:", src);
+        const lastTime = audioEl.currentTime || 0;
+        audioEl.src = src;
+        audioEl.load();
+        audioEl.addEventListener("loadedmetadata", function _seekBack() {
+          audioEl.removeEventListener("loadedmetadata", _seekBack);
+          try {
+            if (lastTime > 0 && isFinite(audioEl.duration) && lastTime < audioEl.duration) {
+              audioEl.currentTime = lastTime;
+            }
+          } catch (_) { /* ignore */ }
+          gPlayerHasFinalAudio = true;
+          refreshPlayerTimeline();
+        }, { once: true });
+      });
+
+      audioEl.dataset.playerBound = "1";
     }
 
-    audioEl.addEventListener("timeupdate", updateTimes);
-    audioEl.addEventListener("loadedmetadata", updateTimes);
-    audioEl.addEventListener("ended", () => {
-      if (playPauseBtn) playPauseBtn.textContent = "\u25B6";
-    });
-
     if (playPauseBtn) {
-      const newBtn = playPauseBtn.cloneNode(true);
-      playPauseBtn.parentNode.replaceChild(newBtn, playPauseBtn);
-
-      newBtn.addEventListener("click", async () => {
+      playPauseBtn.disabled = !gPlayerPlaybackEnabled;
+      playPauseBtn.classList.toggle("is-disabled", !gPlayerPlaybackEnabled);
+      playPauseBtn.setAttribute("aria-disabled", gPlayerPlaybackEnabled ? "false" : "true");
+      if (!gPlayerPlaybackEnabled) playPauseBtn.textContent = "\u25B6";
+      playPauseBtn.onclick = async () => {
+        if (!gPlayerPlaybackEnabled) return;
         if (audioEl.paused) {
+          // Helper: reload source and play once ready (needed on mobile)
+          function reloadAndPlay() {
+            const src = audioEl.getAttribute("src") || audioEl.src;
+            if (!src || src === "#") return;
+            audioEl.src = src;
+            audioEl.load();
+            audioEl.addEventListener("canplay", function _onReady() {
+              audioEl.removeEventListener("canplay", _onReady);
+              gPlayerHasFinalAudio = true;
+              audioEl.play()
+                .then(() => { playPauseBtn.textContent = "\u275A\u275A"; })
+                .catch((err) => { console.error("Reload play failed", err); });
+              refreshPlayerTimeline();
+            }, { once: true });
+          }
+
+          // If the audio ended or is in an error state, reload first
+          if (audioEl.ended || audioEl.error) {
+            reloadAndPlay();
+            return;
+          }
+
           try {
             await audioEl.play();
-            newBtn.textContent = "\u275A\u275A";
-          } catch (e) { console.error("Play error", e); }
+            playPauseBtn.textContent = "\u275A\u275A";
+          } catch (e) {
+            console.error("Play error — reloading source for mobile", e);
+            reloadAndPlay();
+          }
         } else {
           audioEl.pause();
-          newBtn.textContent = "\u25B6";
+          playPauseBtn.textContent = "\u25B6";
         }
-      });
+      };
     }
 
     if (seek) {
-      seek.addEventListener("input", (e) => {
-        if (isFinite(audioEl.duration)) {
-          audioEl.currentTime = (e.target.value / 100) * audioEl.duration;
+      seek.oninput = (e) => {
+        if (!gPlayerPlaybackEnabled) return;
+        if (!isFinite(audioEl.duration) || audioEl.duration <= 0) return;
+
+        let pct = Number(e.target.value || 0);
+        if (!gPlayerHasFinalAudio) {
+          const currentPct = (audioEl.currentTime / audioEl.duration) * 100;
+          pct = Math.min(pct, currentPct);
+          e.target.value = String(pct);
         }
-      });
+
+        audioEl.currentTime = (pct / 100) * audioEl.duration;
+      };
     }
+
+    refreshPlayerTimeline();
   }
 
   // ==================================================================
@@ -1455,31 +2403,47 @@
   // ==================================================================
   document.addEventListener("DOMContentLoaded", async () => {
     gUserId = document.body.dataset.userId;
+    renderTypeCatalog();
 
-    // Determine initial screen with robust error handling
-    // so the user never sees a blank screen
+    // ── Determine initial screen (robust, never shows blank) ──
     let initialScreenDone = false;
-    try {
-      // 1) Check if this is a magic-link redirect (email sign-in completion)
-      const emailSignedIn = await completeEmailSignIn();
-      if (emailSignedIn) {
-        loadSavedProfile();  // load vibe in background (no await needed)
+
+    // Helper: go to the right screen after a successful auth
+    function _authLanded(dest) {
+      if (dest === "result") {
+        let genId = null;
+        try { genId = sessionStorage.getItem("_auth_return_gen"); sessionStorage.removeItem("_auth_return_gen"); } catch (e) {}
+        if (genId) {
+          loadGenerationById(genId);
+          return;
+        }
+      }
+      if (dest === "mood") {
+        switchScreen("screenMood");
+        setTimeout(() => autoSelectMood(), 100);
+      } else if (dest === "generate") {
+        loadSavedProfile();
         loadRecentGenerations();
         switchScreen("screenHome");
-        initialScreenDone = true;
+      } else {
+        // "home" or default
+        loadSavedProfile();
+        loadRecentGenerations();
+        switchScreen("screenHome");
       }
-    } catch (e) {
-      console.error("Email sign-in completion error (non-fatal):", e);
     }
 
+    // 1) Check server session auth (handles Google OAuth callback return)
     if (!initialScreenDone) {
       try {
-        // 2) Check normal auth state
         const isAuth = await checkAuthState();
         if (isAuth) {
-          loadSavedProfile();  // load vibe in background
-          loadRecentGenerations();
-          switchScreen("screenHome");
+          let dest = "home";
+          try {
+            dest = sessionStorage.getItem("_auth_dest") || "home";
+            sessionStorage.removeItem("_auth_dest");
+          } catch (e) { /* private mode */ }
+          _authLanded(dest);
           initialScreenDone = true;
         }
       } catch (e) {
@@ -1487,8 +2451,8 @@
       }
     }
 
+    // 2) Anonymous fallback -> straight to chat
     if (!initialScreenDone) {
-      // Fallback: anonymous user → go straight to chat
       switchScreen("screenChat");
       initChat();
     }
@@ -1502,7 +2466,7 @@
           loadRecentGenerations();
           switchScreen("screenHome");
         } else {
-          switchScreen("screenLogin");
+          openAuthScreen("screenLogin");
         }
       });
     }
@@ -1513,7 +2477,25 @@
         if (gIsAuthenticated) {
           toggleDropdown();
         } else {
-          switchScreen("screenLogin");
+          openAuthScreen("screenLogin");
+        }
+      });
+    }
+
+    const headerMyVibeBtn = $("headerMyVibeBtn");
+    if (headerMyVibeBtn) {
+      const openMyVibeFromHeader = () => {
+        if (gIsAuthenticated) {
+          showMyVibe();
+        } else {
+          openAuthScreen("screenLogin");
+        }
+      };
+      headerMyVibeBtn.addEventListener("click", openMyVibeFromHeader);
+      headerMyVibeBtn.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openMyVibeFromHeader();
         }
       });
     }
@@ -1537,11 +2519,13 @@
       });
     });
 
-    // ── Login screen handlers ──
+    // ── Login screen Google handler ──
     const loginGoogle = $("loginGoogle");
     if (loginGoogle) {
       loginGoogle.addEventListener("click", async () => {
-        const success = await signInWithGoogle();
+        let dest = "home";
+        try { if (sessionStorage.getItem("_auth_return_gen")) dest = "result"; } catch (e) {}
+        const success = await signInWithGoogle(dest);
         if (success) {
           loadRecentGenerations();
           switchScreen("screenHome");
@@ -1549,32 +2533,92 @@
       });
     }
 
-    // ── Email link auth form handler ──
-    const emailAuthForm = $("emailAuthForm");
-
-    if (emailAuthForm) {
-      emailAuthForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        clearEmailError();
-        const email = ($("emailInput").value || "").trim();
-        if (!email) return;
-
-        const sent = await sendEmailSignInLink(email);
-        if (sent) {
-          showEmailSuccess("Check your inbox! We sent a sign-in link to " + email);
-          // Disable the button so they don't spam
-          const btn = $("emailSendLinkBtn");
-          if (btn) { btn.disabled = true; btn.textContent = "Link sent!"; }
+    // ── Register screen Google handler ──
+    const registerGoogle = $("registerGoogle");
+    if (registerGoogle) {
+      registerGoogle.addEventListener("click", async () => {
+        let dest = "home";
+        try { if (sessionStorage.getItem("_auth_return_gen")) dest = "result"; } catch (e) {}
+        const success = await signInWithGoogle(dest);
+        if (success) {
+          loadRecentGenerations();
+          switchScreen("screenHome");
         }
       });
     }
 
-    const loginSkip = $("loginSkip");
-    if (loginSkip) {
-      loginSkip.addEventListener("click", () => {
-        switchScreen("screenChat");
-        initChat();
+    // ── Login email form handler ──
+    const loginEmailForm = $("loginEmailForm");
+    if (loginEmailForm) {
+      loginEmailForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        clearAuthMsgs("loginEmail");
+
+        const email = ($("loginEmailInput").value || "").trim();
+        const password = $("loginPasswordInput").value || "";
+
+        if (!email) { showAuthMsg("loginEmailError", "Please enter your email address."); return; }
+        if (!password) { showAuthMsg("loginEmailError", "Please enter your password."); return; }
+
+        const authenticated = await loginWithEmail(email, password);
+        if (authenticated) {
+          let dest = "home";
+          try {
+            if (sessionStorage.getItem("_auth_return_gen")) dest = "result";
+            else dest = sessionStorage.getItem("_auth_dest") || "home";
+            sessionStorage.removeItem("_auth_dest");
+          } catch (err) {}
+          _authLanded(dest);
+        }
       });
+    }
+
+    // ── Register email form handler ──
+    const registerEmailForm = $("registerEmailForm");
+    if (registerEmailForm) {
+      registerEmailForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        clearAuthMsgs("registerEmail");
+
+        const email = ($("registerEmailInput").value || "").trim();
+        const password = $("registerPasswordInput").value || "";
+        const confirmPassword = $("registerConfirmPasswordInput").value || "";
+
+        if (!email) { showAuthMsg("registerEmailError", "Please enter your email address."); return; }
+        if (!isValidPassword(password)) { showAuthMsg("registerEmailError", "Password must be at least 7 characters and include at least 1 number."); return; }
+        if (password !== confirmPassword) { showAuthMsg("registerEmailError", "Passwords do not match."); return; }
+
+        const authenticated = await registerWithEmail(email, password);
+        if (authenticated) {
+          let dest = "home";
+          try {
+            if (sessionStorage.getItem("_auth_return_gen")) dest = "result";
+            else dest = sessionStorage.getItem("_auth_dest") || "home";
+            sessionStorage.removeItem("_auth_dest");
+          } catch (err) {}
+          _authLanded(dest);
+        }
+      });
+    }
+
+    // ── Switch between login / register screens ──
+    const goToRegister = $("goToRegister");
+    if (goToRegister) {
+      goToRegister.addEventListener("click", () => switchScreen("screenRegister"));
+    }
+    const goToLogin = $("goToLogin");
+    if (goToLogin) {
+      goToLogin.addEventListener("click", () => switchScreen("screenLogin"));
+    }
+
+    // ── Back buttons on auth screens ──
+    const loginBack = $("loginBack");
+    if (loginBack) {
+      loginBack.addEventListener("click", () => navigateBackFromAuth());
+    }
+    const registerBack = $("registerBack");
+    if (registerBack) {
+      registerBack.addEventListener("click", () => navigateBackFromAuth());
     }
 
     // ── Chat text input handlers ──
@@ -1653,11 +2697,34 @@
     }
 
     // ── Profile screen handlers ──
-    const skipSignup = $("skipSignup");
-    if (skipSignup) {
-      skipSignup.addEventListener("click", () => {
-        switchScreen("screenMood");
-        setTimeout(() => autoSelectMood(), 100);
+    const diagTypeModal = $("diagTypeModal");
+    if (diagTypeModal && diagTypeModal.parentElement !== document.body) {
+      document.body.appendChild(diagTypeModal);
+    }
+
+    const diagTypeInfoBtn = $("diagTypeInfoBtn");
+    if (diagTypeInfoBtn) {
+      diagTypeInfoBtn.addEventListener("click", openTypeModal);
+    }
+
+    const diagTypeModalClose = $("diagTypeModalClose");
+    if (diagTypeModalClose) {
+      diagTypeModalClose.addEventListener("click", closeTypeModal);
+    }
+
+    const diagTypeModalBackdrop = $("diagTypeModalBackdrop");
+    if (diagTypeModalBackdrop) {
+      diagTypeModalBackdrop.addEventListener("click", closeTypeModal);
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeTypeModal();
+    });
+
+    const diagShareBtn = $("diagShareBtn");
+    if (diagShareBtn) {
+      diagShareBtn.addEventListener("click", () => {
+        shareProfile();
       });
     }
 
@@ -1665,7 +2732,7 @@
     const signupGoogle = $("signupGoogle");
     if (signupGoogle) {
       signupGoogle.addEventListener("click", async () => {
-        const success = await signInWithGoogle();
+        const success = await signInWithGoogle("mood");
         if (success) {
           switchScreen("screenMood");
           setTimeout(() => autoSelectMood(), 100);
@@ -1673,11 +2740,11 @@
       });
     }
 
-    // Profile screen email signup -> go to login screen
+    // Profile screen email signup -> go to register screen
     const signupEmail = $("signupEmail");
     if (signupEmail) {
       signupEmail.addEventListener("click", () => {
-        switchScreen("screenLogin");
+        openAuthScreen("screenRegister");
       });
     }
 
@@ -1703,10 +2770,18 @@
       });
     }
 
-    // ── Result screen: Favourite button ──
+    // ── Result screen: Favourite + Like/Dislike buttons ──
     const favBtn = $("favBtn");
     if (favBtn) {
       favBtn.addEventListener("click", toggleFavourite);
+    }
+    const likeBtn = $("likeBtn");
+    if (likeBtn) {
+      likeBtn.addEventListener("click", () => toggleLike("liked"));
+    }
+    const dislikeBtn = $("dislikeBtn");
+    if (dislikeBtn) {
+      dislikeBtn.addEventListener("click", () => toggleLike("disliked"));
     }
 
     // ── Mood screen (existing) ──
@@ -1727,6 +2802,17 @@
     }
 
     const moodNextBtn = $("moodNextBtn");
+    const moodBackBtn = $("moodBackBtn");
+    if (moodBackBtn) {
+      moodBackBtn.addEventListener("click", () => {
+        // Go back to whichever profile screen was active
+        if (gProfileJson && gProfileJson.profile_type === "psychoacoustic") {
+          switchScreen("screenPsychProfile");
+        } else {
+          switchScreen("screenProfile");
+        }
+      });
+    }
     if (moodNextBtn) {
       moodNextBtn.addEventListener("click", () => {
         if (!gSelectedMoodId) { const err = $("moodError"); if (err) show(err); return; }
@@ -1762,6 +2848,12 @@
     }
 
     const actNextBtn = $("activityNextBtn");
+    const activityBackBtn = $("activityBackBtn");
+    if (activityBackBtn) {
+      activityBackBtn.addEventListener("click", () => {
+        switchScreen("screenMood");
+      });
+    }
     if (actNextBtn) {
       actNextBtn.addEventListener("click", () => {
         if (!gSelectedActivityId) { const err = $("activityError"); if (err) show(err); return; }
@@ -1773,16 +2865,29 @@
     // ── Extras screen (existing) ──
     const songRefInput = $("songRefInput");
     const genreSelect = $("genreSelect");
+    const languageSelect = $("languageSelect");
     const bpmSlider = $("bpmSlider");
+    const surpriseToggle = $("surpriseToggle");
     const bpmValue = $("bpmValue");
     const extrasNextBtn = $("extrasNextBtn");
+    const extrasBackBtn = $("extrasBackBtn");
+
+    if (extrasBackBtn) {
+      extrasBackBtn.addEventListener("click", () => {
+        switchScreen("screenActivity");
+      });
+    }
 
     function updateExtrasButton() {
       const hasSong = songRefInput && songRefInput.value.trim() !== "";
       const hasGenre = genreSelect && genreSelect.value !== "";
+      const hasLanguageOverride = languageSelect && (languageSelect.value || "english") !== "english";
       const hasBpm = bpmSlider && parseInt(bpmSlider.value, 10) > 0;
+      const hasSurprise = !!(surpriseToggle && surpriseToggle.checked);
       if (extrasNextBtn) {
-        extrasNextBtn.textContent = (hasSong || hasGenre || hasBpm) ? "NEXT >" : "SKIP >";
+        extrasNextBtn.textContent = (hasSong || hasGenre || hasLanguageOverride || hasBpm || hasSurprise)
+          ? "NEXT >"
+          : "SKIP >";
       }
     }
 
@@ -1798,6 +2903,13 @@
         updateExtrasButton();
       });
     }
+    if (languageSelect) {
+      gLanguage = (languageSelect.value || "english").toLowerCase();
+      languageSelect.addEventListener("change", () => {
+        gLanguage = (languageSelect.value || "english").toLowerCase();
+        updateExtrasButton();
+      });
+    }
     if (bpmSlider) {
       bpmSlider.value = "0";
       bpmSlider.addEventListener("input", () => {
@@ -1807,9 +2919,62 @@
         updateExtrasButton();
       });
     }
+    if (surpriseToggle) {
+      gSurpriseMe = !!surpriseToggle.checked;
+      surpriseToggle.addEventListener("change", () => {
+        gSurpriseMe = !!surpriseToggle.checked;
+        updateExtrasButton();
+      });
+    }
 
     if (extrasNextBtn) {
       extrasNextBtn.addEventListener("click", () => handleGenerate());
+    }
+
+    updateExtrasButton();
+
+    // ── Path choice handlers (Quick Analysis vs Full Test) ──
+    const pathQuickBtn = $("pathQuickBtn");
+    if (pathQuickBtn) {
+      pathQuickBtn.addEventListener("click", startQuickAnalysis);
+    }
+    const pathFullTestBtn = $("pathFullTestBtn");
+    if (pathFullTestBtn) {
+      pathFullTestBtn.addEventListener("click", startFullTest);
+    }
+
+    // ── Psychoacoustic profile screen handlers ──
+    const psychGenerateBtn = $("psychGenerateBtn");
+    if (psychGenerateBtn) {
+      psychGenerateBtn.addEventListener("click", () => {
+        switchScreen("screenMood");
+        setTimeout(() => autoSelectMood(), 100);
+      });
+    }
+
+    const psychShareBtn = $("psychShareBtn");
+    if (psychShareBtn) {
+      psychShareBtn.addEventListener("click", () => {
+        shareProfile();
+      });
+    }
+
+    // Psych profile signup buttons
+    const psychSignupGoogle = $("psychSignupGoogle");
+    if (psychSignupGoogle) {
+      psychSignupGoogle.addEventListener("click", async () => {
+        const success = await signInWithGoogle("mood");
+        if (success) {
+          switchScreen("screenMood");
+          setTimeout(() => autoSelectMood(), 100);
+        }
+      });
+    }
+    const psychSignupEmail = $("psychSignupEmail");
+    if (psychSignupEmail) {
+      psychSignupEmail.addEventListener("click", () => {
+        openAuthScreen("screenRegister");
+      });
     }
   });
 

@@ -16,7 +16,9 @@ class SunoClient:
 
     - POST /api/v1/generate
     - GET  /api/v1/generate/record-info?taskId=...
-    Docs: https://docs.sunoapi.org/suno-api/get-music-generation-details
+    - POST /api/v1/lyrics
+    - GET  /api/v1/lyrics/record-info?taskId=...
+    Docs: https://docs.sunoapi.org
     """
 
     def __init__(self, base_url: str, api_key: str, timeout_s: int = 180):
@@ -72,8 +74,7 @@ class SunoClient:
         if custom_mode:
             payload["title"] = (title or "Untitled")[:100]
             payload["style"] = (style or "")[:1000]
-            if not is_instrumental:
-                payload["prompt"] = (prompt or "")[:5000]
+            payload["prompt"] = (prompt or "")[:5000]
         else:
             # Non-custom mode: only prompt
             payload["prompt"] = (prompt or "")[:500]
@@ -127,6 +128,93 @@ class SunoClient:
             raise RuntimeError(f"Suno generate failed: {data.get('code')} {data.get('msg')}")
 
         return data
+
+    # -----------------------------------------------------------------
+    # Lyrics generation (POST /api/v1/lyrics + polling)
+    # -----------------------------------------------------------------
+
+    def generate_lyrics(self, prompt: str, callback_url: str = "") -> Dict[str, Any]:
+        if not callback_url or any(x in callback_url for x in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            callback_url = "http://127.0.0.1:7777/callback/"
+
+        if len(prompt) > 200:
+            prompt = prompt[:200].rstrip()
+
+        payload = {
+            "prompt": prompt,
+            "callBackUrl": callback_url,
+        }
+
+        url = f"{self.base_url}/api/v1/lyrics"
+        logger.info("Suno Lyrics API POST to %s (prompt_chars=%d)", url, len(prompt))
+
+        try:
+            r = requests.post(url, json=payload, headers=self._headers(), timeout=self.timeout_s)
+            logger.info("Suno Lyrics API response status: %s", r.status_code)
+        except requests.exceptions.ConnectionError as e:
+            raise RuntimeError(f"Failed to connect to Suno Lyrics API at {url}: {e}")
+        except requests.exceptions.Timeout as e:
+            raise RuntimeError(f"Timeout connecting to Suno Lyrics API: {e}")
+
+        try:
+            data = r.json()
+            logger.info("Suno Lyrics API response: code=%s, msg=%s", data.get("code"), data.get("msg"))
+        except Exception as json_err:
+            logger.error("Failed to parse Lyrics JSON response: %s, raw: %s", json_err, r.text[:500])
+            r.raise_for_status()
+            raise RuntimeError(f"Invalid JSON response from Suno Lyrics API: {r.text[:200]}")
+
+        r.raise_for_status()
+
+        if isinstance(data, dict) and data.get("code") != 200:
+            raise RuntimeError(f"Suno lyrics generation failed: {data.get('code')} {data.get('msg')}")
+
+        return data
+
+    def get_lyrics_details(self, task_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/v1/lyrics/record-info"
+        r = requests.get(
+            url,
+            params={"taskId": str(task_id)},
+            headers=self._headers(),
+            timeout=self.timeout_s,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict) and data.get("code") != 200:
+            raise RuntimeError(f"Suno lyrics record-info failed: {data.get('code')} {data.get('msg')}")
+        return data
+
+    def poll_until_lyrics_ready(
+            self,
+            task_id: str,
+            attempts: int = 60,
+            sleep_s: float = 1,
+    ) -> Dict[str, Any]:
+        """Poll /api/v1/lyrics/record-info until SUCCESS or a terminal failure."""
+        _LYRICS_FAIL = (
+            "CREATE_TASK_FAILED",
+            "GENERATE_LYRICS_FAILED",
+            "CALLBACK_EXCEPTION",
+            "SENSITIVE_WORD_ERROR",
+        )
+        last: Dict[str, Any] = {}
+        for _ in range(int(attempts)):
+            last = self.get_lyrics_details(task_id)
+            status = ((last.get("data") or {}).get("status") or "").upper()
+
+            if status == "SUCCESS":
+                return last
+            if status in _LYRICS_FAIL:
+                return last
+
+            time.sleep(float(sleep_s))
+
+        return last
+
+    # -----------------------------------------------------------------
+    # Music generation details + polling
+    # -----------------------------------------------------------------
 
     def get_generation_details(self, task_id: str) -> Dict[str, Any]:
         url = f"{self.base_url}/api/v1/generate/record-info"

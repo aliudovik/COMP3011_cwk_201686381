@@ -43,7 +43,7 @@
         <img src="{{ url_for('static', filename='logo.png') }}?v={{ cache_bust }}" alt="drVibey" class="header-logo-img" />
       </button>
       <div class="brand-center">
-        <div class="brand-title">drVibey</div>
+        <div id="headerMyVibeBtn" class="brand-title" role="button" tabindex="0" aria-label="Open My Vibe">drVibey</div>
         <div class="brand-subtitle">Music heals.</div>
       </div>
       <!-- User menu / profile button (always visible) -->
@@ -74,7 +74,7 @@
       </div>
       <div class="side-menu-footer">
         <button class="side-menu-item side-menu-logout" data-action="logout" type="button">Log Out</button>
-        <div class="side-menu-contact">pr.ae@outlook.com</div>
+        <div class="side-menu-contact">contact: pr.ae@outlook.com</div>
       </div>
     </nav>
 
@@ -82,12 +82,21 @@
     <div id="loadingOverlay" class="loading-overlay is-hidden" aria-hidden="true">
       <div class="spinner" aria-label="Loading"></div>
       <div id="loadingText" class="loading-text">Loading&hellip;</div>
+      <div id="loadingSubtext" class="loading-subtext is-hidden"></div>
+      <div id="loadingEta" class="loading-eta is-hidden"></div>
     </div>
 
     <!-- SCREEN: LOGIN -->
     <section id="screenLogin" class="screen is-hidden">
       <div class="login-card">
-        <div class="login-title">Welcome to drVibey</div>
+        <div class="auth-header">
+          <button id="loginBack" class="auth-back-btn" type="button" aria-label="Back">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 12H5M12 19l-7-7 7-7"/>
+            </svg>
+          </button>
+          <div class="auth-title">Welcome back</div>
+        </div>
         <div class="login-subtitle">Sign in to save your profile and generate personal music</div>
 
         <button id="loginGoogle" class="signup-btn signup-google" type="button">
@@ -97,17 +106,57 @@
 
         <div class="login-divider"><span>or</span></div>
 
-        <form id="emailAuthForm" class="email-auth-form" autocomplete="on">
-          <input id="emailInput" type="email" class="email-auth-input" placeholder="Email address" required autocomplete="email" />
-          <div id="emailAuthError" class="email-auth-error is-hidden"></div>
-          <div id="emailAuthSuccess" class="email-auth-success is-hidden"></div>
-          <button id="emailSendLinkBtn" class="signup-btn signup-email" type="submit">
+        <form id="loginEmailForm" class="email-auth-form" autocomplete="on">
+          <input id="loginEmailInput" type="email" class="email-auth-input" placeholder="Email address" required autocomplete="email" />
+          <input id="loginPasswordInput" type="password" class="email-auth-input" placeholder="Password" required autocomplete="current-password" minlength="7" />
+          <div id="loginEmailError" class="email-auth-error is-hidden"></div>
+          <div id="loginEmailSuccess" class="email-auth-success is-hidden"></div>
+          <button class="signup-btn signup-email" type="submit">
             <span class="signup-icon">@</span>
-            Send me a sign-in link
+            Sign in with Email
           </button>
         </form>
+
+        <div class="login-divider"><span>or</span></div>
+        <button id="goToRegister" class="auth-switch-btn" type="button">Take me to registration</button>
       </div>
-      <button id="loginSkip" class="skip-btn" type="button">Continue without signing in</button>
+    </section>
+
+    <!-- SCREEN: REGISTER -->
+    <section id="screenRegister" class="screen is-hidden">
+      <div class="login-card">
+        <div class="auth-header">
+          <button id="registerBack" class="auth-back-btn" type="button" aria-label="Back">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 12H5M12 19l-7-7 7-7"/>
+            </svg>
+          </button>
+          <div class="auth-title">Create your account</div>
+        </div>
+        <div class="login-subtitle">Register to save your profile and generate personal music</div>
+
+        <button id="registerGoogle" class="signup-btn signup-google" type="button">
+          <span class="signup-icon">G</span>
+          Continue with Google
+        </button>
+
+        <div class="login-divider"><span>or</span></div>
+
+        <form id="registerEmailForm" class="email-auth-form" autocomplete="on">
+          <input id="registerEmailInput" type="email" class="email-auth-input" placeholder="Email address" required autocomplete="email" />
+          <input id="registerPasswordInput" type="password" class="email-auth-input" placeholder="Password (min 7 chars, at least 1 number)" required autocomplete="new-password" minlength="7" />
+          <input id="registerConfirmPasswordInput" type="password" class="email-auth-input" placeholder="Confirm password" required autocomplete="new-password" minlength="7" />
+          <div id="registerEmailError" class="email-auth-error is-hidden"></div>
+          <div id="registerEmailSuccess" class="email-auth-success is-hidden"></div>
+          <button class="signup-btn signup-email" type="submit">
+            <span class="signup-icon">@</span>
+            Register with Email
+          </button>
+        </form>
+
+        <div class="login-divider"><span>or</span></div>
+        <button id="goToLogin" class="auth-switch-btn" type="button">Take me to login</button>
+      </div>
     </section>
 
     <!-- SCREEN: HOME (Recent Generations) -->
@@ -134,6 +183,16 @@
 
     <!-- SCREEN 1: CHAT -->
     <section id="screenChat" class="screen is-hidden">
+      <div class="chat-progress" aria-live="polite">
+        <div class="chat-progress-head">
+          <span class="chat-progress-label">Taste Profile Progress</span>
+          <span id="chatProgressText" class="chat-progress-text">Question 0 of 13</span>
+        </div>
+        <div class="chat-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="13" aria-valuenow="0" aria-label="Chat profile progress">
+          <div id="chatProgressFill" class="chat-progress-fill" style="width: 0%"></div>
+        </div>
+      </div>
+
       <div id="chatMessages" class="chat-messages">
         <!-- Chat bubbles rendered by JS -->
       </div>
@@ -193,9 +252,98 @@
         <button id="chipSubmitBtn" class="primary-btn" type="button" disabled>Confirm picks</button>
       </div>
 
-      <!-- Button select area for Q9 (hidden until buttons question) -->
+      <!-- Button select area for Q4-Q9 (hidden until buttons question) -->
       <div id="buttonSelectWrap" class="button-select-wrap is-hidden">
         <div id="buttonOptions" class="button-options"></div>
+      </div>
+
+      <!-- Multi-button select area for Q10 personality triptych -->
+      <div id="multiButtonSelectWrap" class="multi-btn-select-wrap is-hidden">
+        <div id="multiButtonOptions" class="multi-btn-options"></div>
+      </div>
+
+      <!-- Psychoacoustic Test UI (inline, replaces chat input when Full Test selected) -->
+      <div id="psychTestWrap" class="psych-test-wrap is-hidden">
+        <div class="psych-progress">
+          <div class="psych-progress-head">
+            <span class="psych-progress-label">Psychoacoustic Assessment</span>
+            <span id="psychProgressText" class="psych-progress-text">Question 1 of 30</span>
+          </div>
+          <div class="psych-progress-track">
+            <div id="psychProgressFill" class="psych-progress-fill" style="width:0%"></div>
+          </div>
+        </div>
+
+        <!-- Audio question card -->
+        <div id="psychAudioCard" class="psych-audio-card is-hidden">
+          <div id="psychAudioPrompt" class="psych-question-prompt"></div>
+          <div class="psych-players">
+            <div class="psych-player-panel psych-player-left">
+              <div class="psych-player-label">Clip A</div>
+              <button id="psychPlayLeft" class="psych-play-btn" type="button" aria-label="Play left clip">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+              </button>
+              <div id="psychLeftStatus" class="psych-player-status">Tap to play</div>
+            </div>
+            <div class="psych-player-divider">VS</div>
+            <div class="psych-player-panel psych-player-right">
+              <div class="psych-player-label">Clip B</div>
+              <button id="psychPlayRight" class="psych-play-btn" type="button" aria-label="Play right clip">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+              </button>
+              <div id="psychRightStatus" class="psych-player-status">Tap to play</div>
+            </div>
+          </div>
+          <div class="psych-slider-wrap">
+            <div class="psych-slider-labels">
+              <span>Strongly prefer A</span>
+              <span>Slightly prefer A</span>
+              <span>Slightly prefer B</span>
+              <span>Strongly prefer B</span>
+            </div>
+            <input id="psychAudioSlider" type="range" min="1" max="6" step="1" value="0" class="psych-slider" disabled />
+            <div class="psych-slider-ticks">
+              <span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Text question card -->
+        <div id="psychTextCard" class="psych-text-card is-hidden">
+          <div id="psychTextPrompt" class="psych-question-prompt"></div>
+          <div class="psych-text-options">
+            <div id="psychOptionA" class="psych-text-option-label psych-option-left"></div>
+            <div id="psychOptionB" class="psych-text-option-label psych-option-right"></div>
+          </div>
+          <div class="psych-slider-wrap">
+            <div class="psych-slider-labels">
+              <span>Strongly A</span>
+              <span>Slightly A</span>
+              <span>Slightly B</span>
+              <span>Strongly B</span>
+            </div>
+            <input id="psychTextSlider" type="range" min="1" max="6" step="1" value="0" class="psych-slider" disabled />
+            <div class="psych-slider-ticks">
+              <span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+        </div>
+
+        <button id="psychNextBtn" class="primary-btn psych-next-btn" type="button" disabled>Next</button>
+      </div>
+
+      <!-- Path choice buttons (Quick Analysis vs Full Test) -->
+      <div id="pathChoiceWrap" class="path-choice-wrap is-hidden">
+        <button id="pathQuickBtn" class="path-choice-btn path-quick" type="button">
+          <span class="path-choice-icon">&#9889;</span>
+          <span class="path-choice-title">Quick Analysis</span>
+          <span class="path-choice-desc">Upload screenshots, answer a few questions (~2 min)</span>
+        </button>
+        <button id="pathFullTestBtn" class="path-choice-btn path-full" type="button">
+          <span class="path-choice-icon">&#127911;</span>
+          <span class="path-choice-title">The Full Test</span>
+          <span class="path-choice-desc">30 psychoacoustic questions with audio (~8 min, most accurate)</span>
+        </button>
       </div>
     </section>
 
@@ -203,15 +351,49 @@
     <section id="screenProfile" class="screen is-hidden">
       <div class="card diagnosis-card">
         <div class="diagnosis-header">Your Vibe Diagnosis</div>
+        <div class="diagnosis-avatar-wrap">
+          <img id="diagAvatarImg" class="diagnosis-avatar is-hidden" alt="Your generated anime avatar" />
+          <div id="diagAvatarFallback" class="diagnosis-avatar-fallback">♪</div>
+        </div>
+
+        <div class="diagnosis-type-wrap">
+          <div class="diagnosis-type-label">Your Type</div>
+          <div id="diagType" class="diagnosis-type">—</div>
+          <div id="diagTypeName" class="diagnosis-type-name">Resonance Seeker</div>
+          <button id="diagTypeInfoBtn" class="diag-type-info-btn" type="button" aria-haspopup="dialog" aria-controls="diagTypeModal">What do these codes mean?</button>
+        </div>
+
+        <div id="diagSoul" class="diagnosis-soul is-hidden"></div>
+
+        <div class="diagnosis-stats" id="diagStats">
+          <!-- stats rendered by JS -->
+        </div>
+
+        <div id="diagVocalFocus" class="diagnosis-vocal-focus is-hidden"></div>
+        <div id="diagGenres" class="diagnosis-genres"></div>
+        <div id="diagArtists" class="diagnosis-artists"></div>
+        <div id="diagSuggestedArtists" class="diagnosis-artists is-hidden"></div>
+
         <div id="diagArchetype" class="diagnosis-archetype"></div>
         <div id="diagText" class="diagnosis-text"></div>
 
-        <div class="diagnosis-dimensions" id="diagDimensions">
-          <!-- dimension bars rendered by JS -->
+        <div class="diagnosis-share-wrap">
+          <button id="diagShareBtn" class="primary-btn" type="button">Share profile</button>
+          <button id="profileProceedBtn" class="primary-btn is-hidden" type="button">Generate your song</button>
+          <div id="diagShareStatus" class="diagnosis-share-status is-hidden"></div>
         </div>
+      </div>
 
-        <div id="diagGenres" class="diagnosis-genres"></div>
-        <div id="diagArtists" class="diagnosis-artists"></div>
+      <div id="diagTypeModal" class="diag-type-modal is-hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="diagTypeModalTitle">
+        <div id="diagTypeModalBackdrop" class="diag-type-modal-backdrop"></div>
+        <div class="diag-type-modal-panel" role="document">
+          <div class="diag-type-modal-head">
+            <h3 id="diagTypeModalTitle">Vibe Type Guide</h3>
+            <button id="diagTypeModalClose" type="button" class="diag-type-modal-close" aria-label="Close">×</button>
+          </div>
+          <div class="diag-type-legend">F/N: Futuristic or Nostalgic · V/I: Vocal-led or Instrumental-led · P/C: Powerful or Chill · D/R: Dreamer or Realist</div>
+          <div id="diagTypeCatalog" class="diag-type-catalog"></div>
+        </div>
       </div>
 
       <!-- Signup CTA (shown only if NOT already authenticated) -->
@@ -226,17 +408,92 @@
           <span class="signup-icon">@</span>
           Continue with Email
         </button>
-
-        <button id="skipSignup" class="skip-btn" type="button">Skip for now</button>
       </div>
 
-      <!-- Proceed button (shown if already authenticated) -->
-      <button id="profileProceedBtn" class="primary-btn is-hidden" type="button">Generate your song</button>
+    </section>
+
+    <!-- SCREEN: PSYCHOACOUSTIC PROFILE RESULT -->
+    <section id="screenPsychProfile" class="screen is-hidden">
+      <div class="card diagnosis-card psych-profile-card">
+        <div class="diagnosis-header">Your Psychoacoustic Profile</div>
+
+        <div class="diagnosis-avatar-wrap">
+          <img id="psychAvatarImg" class="diagnosis-avatar is-hidden" alt="Your psychoacoustic avatar" />
+          <div id="psychAvatarFallback" class="diagnosis-avatar-fallback psych-avatar-fallback">&#127925;</div>
+        </div>
+
+        <div class="diagnosis-type-wrap">
+          <div class="diagnosis-type-label">Your Code</div>
+          <div id="psychCode" class="diagnosis-type psych-code">----</div>
+          <div id="psychTitle" class="diagnosis-type-name psych-title">Calculating...</div>
+          <button id="psychTypeInfoBtn" class="diag-type-info-btn" type="button" aria-haspopup="dialog" aria-controls="psychTypeModal">What do these archetypes mean?</button>
+        </div>
+
+        <div id="psychAxes" class="psych-axes">
+          <!-- 4 axis bars rendered by JS -->
+        </div>
+
+        <div class="psych-sections">
+          <div class="psych-section">
+            <div class="psych-section-title">How You Actually Work</div>
+            <div id="psychSecWork" class="psych-section-text"></div>
+          </div>
+          <div class="psych-section">
+            <div class="psych-section-title">The Superpower</div>
+            <div id="psychSecPower" class="psych-section-text"></div>
+          </div>
+          <div class="psych-section">
+            <div class="psych-section-title">Achilles' Heel</div>
+            <div id="psychSecHeel" class="psych-section-text"></div>
+          </div>
+          <div class="psych-section">
+            <div class="psych-section-title">Your Perfect Studio</div>
+            <div id="psychSecStudio" class="psych-section-text"></div>
+          </div>
+        </div>
+
+        <div class="diagnosis-share-wrap">
+          <button id="psychShareBtn" class="primary-btn" type="button">Share Profile</button>
+          <button id="psychGenerateBtn" class="primary-btn" type="button">Generate Your Song</button>
+          <div id="psychShareStatus" class="diagnosis-share-status is-hidden"></div>
+        </div>
+      </div>
+
+      <div id="psychTypeModal" class="diag-type-modal is-hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="psychTypeModalTitle">
+        <div id="psychTypeModalBackdrop" class="diag-type-modal-backdrop"></div>
+        <div class="diag-type-modal-panel" role="document">
+          <div class="diag-type-modal-head">
+            <h3 id="psychTypeModalTitle">Psychoacoustic Archetype Guide</h3>
+            <button id="psychTypeModalClose" type="button" class="diag-type-modal-close" aria-label="Close">×</button>
+          </div>
+          <div class="diag-type-legend">M/B: Mozart vs Beethoven · E/K: Elvis vs Kurt · L/D: Lamar vs Drake · T/G: Taylor vs Gaga</div>
+          <div id="psychTypeCatalog" class="diag-type-catalog"></div>
+        </div>
+      </div>
+
+      <div id="psychProfileCta" class="profile-cta is-hidden">
+        <div class="profile-cta-text">Save your profile and generate your personal song?</div>
+        <button id="psychSignupGoogle" class="signup-btn signup-google" type="button">
+          <span class="signup-icon">G</span>
+          Continue with Google
+        </button>
+        <button id="psychSignupEmail" class="signup-btn signup-email" type="button">
+          <span class="signup-icon">@</span>
+          Continue with Email
+        </button>
+      </div>
     </section>
 
     <!-- SCREEN 2: MOOD + INTENSITY -->
     <section id="screenMood" class="screen is-hidden">
-      <div class="status-line">Profile ready!</div>
+      <div class="status-header">
+        <button id="moodBackBtn" class="status-back-btn" type="button" aria-label="Back">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <div class="status-line">Profile ready!</div>
+      </div>
 
       <div class="card mood-card">
         <div class="card-title">How are you feeling right now?</div>
@@ -280,7 +537,14 @@
 
     <!-- SCREEN 3: ACTIVITY + VOCAL TOGGLE -->
     <section id="screenActivity" class="screen is-hidden">
-      <div class="status-line">Mood selected!</div>
+      <div class="status-header">
+        <button id="activityBackBtn" class="status-back-btn" type="button" aria-label="Back">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <div class="status-line">Mood selected!</div>
+      </div>
 
       <div class="card activity-card">
         <div class="card-title" style="margin-bottom: 40px !important">What are you doing?</div>
@@ -320,7 +584,14 @@
 
     <!-- SCREEN 4: EXTRAS (OPTIONAL) -->
     <section id="screenExtras" class="screen is-hidden">
-      <div class="status-line">Almost there!</div>
+      <div class="status-header">
+        <button id="extrasBackBtn" class="status-back-btn" type="button" aria-label="Back">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <div class="status-line">Almost there!</div>
+      </div>
 
       <div class="card extras-card">
         <div class="card-title">Fine-tune (optional)</div>
@@ -341,6 +612,15 @@
         </div>
 
         <div class="extras-field">
+          <label class="extras-label" for="languageSelect">Language</label>
+          <select id="languageSelect" class="extras-select">
+            {% for lang in language_options %}
+              <option value="{{ lang|lower }}" {% if lang == 'English' %}selected{% endif %}>{{ lang }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="extras-field">
           <label class="extras-label" for="bpmSlider">BPM <span id="bpmValue" class="bpm-value-display">--</span></label>
           <div class="slider-wrap">
             <span class="slider-end-label">60</span>
@@ -348,12 +628,35 @@
             <span class="slider-end-label">200</span>
           </div>
         </div>
+
+        <label class="extras-check-row" for="surpriseToggle">
+          <input id="surpriseToggle" class="extras-check" type="checkbox" />
+          <span class="extras-check-label">Surprise me (more experimental)</span>
+        </label>
       </div>
 
       <button id="extrasNextBtn" class="primary-btn" type="button">SKIP &gt;</button>
 
       <div class="micro-note">
         You can skip this step or add details to guide the generation.
+      </div>
+    </section>
+
+    <!-- SCREEN: GENERATING (during ~30s wait) -->
+    <section id="screenGenerating" class="screen is-hidden">
+      <div class="generating-card">
+        <div class="generating-visual" aria-hidden="true">
+          <div class="generating-bars">
+            <span class="gen-bar"></span><span class="gen-bar"></span><span class="gen-bar"></span>
+            <span class="gen-bar"></span><span class="gen-bar"></span><span class="gen-bar"></span>
+            <span class="gen-bar"></span><span class="gen-bar"></span><span class="gen-bar"></span>
+          </div>
+        </div>
+        <p id="generatingStep" class="generating-step">Building your vibe…</p>
+        <p id="generatingContext" class="generating-context"></p>
+        <p class="generating-hint">Usually ready in under a minute (can be a bit more).</p>
+        <p id="generatingElapsed" class="generating-elapsed"></p>
+        <div id="vibeToastZone" class="vibe-toast-zone"></div>
       </div>
     </section>
 
@@ -388,11 +691,25 @@
               <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
             </svg>
           </button>
-          <a id="downloadBtn" class="download-btn is-disabled" href="#" download aria-disabled="true">DOWNLOAD</a>
+          <button id="likeBtn" class="like-btn" type="button" aria-label="Thumbs up">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14z"/>
+              <path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/>
+            </svg>
+          </button>
+          <button id="dislikeBtn" class="dislike-btn" type="button" aria-label="Thumbs down">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10z"/>
+              <path d="M17 2h2.67A2.31 2.31 0 0122 4v7a2.31 2.31 0 01-2.33 2H17"/>
+            </svg>
+          </button>
         </div>
 
-        <div class="micro-note">
-          Full song download available in 2-3 minutes, but you can listen right now!
+        <div id="playbackTimer" class="playback-timer"></div>
+
+        <div id="similarSongs" class="similar-songs is-hidden">
+          <div class="similar-songs-title">SIMILAR REAL SONGS</div>
+          <div id="similarSongsList" class="similar-songs-list"></div>
         </div>
       </div>
 
@@ -415,6 +732,7 @@
       }
     })();
   </script>
+  <script src="{{ url_for('static', filename='psychoacoustic.js') }}?v={{ cache_bust }}"></script>
   <script src="{{ url_for('static', filename='public.js') }}?v={{ cache_bust }}"></script>
 </body>
 </html>

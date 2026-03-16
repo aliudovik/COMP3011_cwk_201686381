@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import threading
+import time
+import logging
 from typing import Any, Dict, List, Optional, Union
 
 from flask import current_app
@@ -16,6 +18,8 @@ from app.services.suno_client import SunoClient
 from app.services.providers.spotify import SpotifyProvider
 from datetime import datetime, timezone
 from app.services.providers.youtube import YouTubeProvider
+
+log = logging.getLogger("drvibey.jobs")
 
 # IMPORTANT: must match your OAuth app redirect
 SPOTIFY_REDIRECT_URI = "https://drvibey.com/callback/spotify"
@@ -49,7 +53,6 @@ def _run_in_app_context(fn, *args, **kwargs):
 # =============================================================================
 # JS-friendly dispatch wrappers (match your frontend payloads)
 # =============================================================================
-
 
 
 def api_ingest(user_id: int, provider: str, source: str = "top", provider_account_id: Optional[int] = None):
@@ -102,7 +105,7 @@ def ingest_youtube_liked_videos(user_id: int, provider_account_id: Optional[int]
     if not pa:
         return {"ok": False, "error": "User has not linked a YouTube account."}
 
-    # ✅ use OAuthToken (NOT pa.access_token)
+    # use OAuthToken (NOT pa.access_token)
     access_token = _youtube_access_token_from_oauth(pa.id)
     if not access_token:
         return {"ok": False, "error": "YouTube token not found"}
@@ -202,21 +205,25 @@ def _api_generate_impl(
 
     out = generate_suno_payload_with_openai(
         cerebras_api_key=cerebras_api_key,  # <--- New param name
-        model=current_app.config.get("LLM_MODEL", "llama-3.3-70b"),  # <--- Pass the model
+        model=current_app.config.get("LLM_MODEL", "gpt-oss-120b"),  # <--- Pass the model
         profile_json=lp.profile_json,
         mood_id=mood_id,
         instrumental=bool(instrumental),
-        custom_mode=bool(custom_mode),
+        language="english",
+        surprise_me=False,
+        custom_mode=True,
         title_hint=(title_hint or "").strip(),
         style_hint=(style_hint or "").strip(),
     )
 
     # 3) Insert valid Generation row (openai_prompt + suno_request are NOT NULL in your model)
+    openai_prompt_data = out.get("openai_prompt") or {}
+    openai_prompt_data["lyrics_brief"] = out.get("lyrics_brief") or ""
     gen = Generation(
         user_id=user_id,
         listener_profile_id=lp.id,
         mood=mood_id,
-        openai_prompt=out.get("openai_prompt") or {},
+        openai_prompt=openai_prompt_data,
         suno_request=out.get("suno_payload") or {},
         status="queued",
     )
@@ -497,7 +504,7 @@ def build_profile_for_user(user_id: int):
 def _build_profile_for_user_impl(user_id: int):
     # CHANGE: Get Cerebras Key and Model
     cerebras_api_key = current_app.config.get("CEREBRAS_API_KEY", "") or os.getenv("CEREBRAS_API_KEY", "")
-    llm_model = current_app.config.get("LLM_MODEL", "llama-3.3-70b")
+    llm_model = current_app.config.get("LLM_MODEL", "gpt-oss-120b")
 
     result = build_profile(
         user_id=user_id,
@@ -538,35 +545,47 @@ def _rebuild_profile_pipeline_impl(user_id: int, provider_account_id: Optional[i
 # =============================================================================
 # Generation pipeline: OpenAI prompt -> local suno-api
 # =============================================================================
-
 def run_generation_pipeline(generation_id: int):
     return _run_in_app_context(_run_generation_pipeline_impl, generation_id)
 
 
 def _run_generation_pipeline_impl(generation_id: int):
+    pipeline_started_at = time.perf_counter()
     gen: Generation = db.session.get(Generation, generation_id)
     if not gen:
         return {"ok": False, "error": f"Generation {generation_id} not found"}
 
+    queue_wait_ms = None
+    if getattr(gen, "created_at", None):
+        created_at = gen.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        queue_wait_ms = int((datetime.now(timezone.utc) - created_at).total_seconds() * 1000)
+
+    log.info(
+        "[generation] worker picked generation_id=%s status=%s queue_wait_ms=%s",
+        generation_id,
+        gen.status,
+        queue_wait_ms,
+    )
+
     gen.status = "running"
     db.session.commit()
 
-    # ------------------------------------------------------------------
-    # NEW: Use the stored Suno request that /api/generate already created
-    # ------------------------------------------------------------------
     suno_payload = getattr(gen, "suno_request", None) or {}
-
-    # normalize to dict
     if not isinstance(suno_payload, dict):
         suno_payload = {}
 
     prompt = (suno_payload.get("prompt") or "").strip()
 
-    # Optional fallback (only for older/bad rows that somehow have empty suno_request)
+    # Queue-first API stores empty suno_request; worker builds it here.
     if not prompt:
-        # You can either FAIL here (strict pipeline) or do a fallback.
-        # Fallback shown below (safe for legacy rows):
-        lp = ListenerProfile.query.filter_by(user_id=gen.user_id).first()
+        lp = (
+            ListenerProfile.query
+            .filter_by(user_id=gen.user_id)
+            .order_by(ListenerProfile.created_at.desc())
+            .first()
+        )
         if not lp or not lp.profile_json:
             gen.status = "failed"
             gen.result_json = {"error": "No listener profile found. Build profile first."}
@@ -574,29 +593,39 @@ def _run_generation_pipeline_impl(generation_id: int):
             return {"ok": False, "error": "No listener profile"}
 
         cerebras_api_key = current_app.config.get("CEREBRAS_API_KEY", "") or os.getenv("CEREBRAS_API_KEY", "")
-
-        mood_id = (getattr(gen, "mood", None) or "energetic")
-        mood_id = str(mood_id) if mood_id is not None else "energetic"
+        mood_id = str(getattr(gen, "mood", None) or "energetic")
+        gen_controls = {}
+        if isinstance(suno_payload.get("controls"), dict):
+            gen_controls = suno_payload.get("controls") or {}
+        language = str(gen_controls.get("language") or "english").strip().lower() or "english"
+        surprise_me = bool(gen_controls.get("surprise_me", False))
 
         out = generate_suno_payload_with_openai(
-            cerebras_api_key=cerebras_api_key,  # <--- New param name
-            model=current_app.config.get("LLM_MODEL", "llama-3.3-70b"),  # <--- Pass the model
+            cerebras_api_key=cerebras_api_key,
+            model=current_app.config.get("LLM_MODEL", "gpt-oss-120b"),
             profile_json=lp.profile_json,
             mood_id=mood_id,
+            mood_intensity=getattr(gen, "mood_intensity", None),
+            activity_id=getattr(gen, "activity", None),
             instrumental=bool(getattr(gen, "instrumental", False)),
+            song_reference=getattr(gen, "song_reference", None),
+            genre_override=getattr(gen, "genre", None),
+            bpm_target=getattr(gen, "bpm", None),
+            language=language,
+            surprise_me=surprise_me,
             custom_mode=bool(getattr(gen, "custom_mode", False)),
             title_hint=getattr(gen, "title", "") or "",
             style_hint=getattr(gen, "style", "") or "",
         )
 
-        gen.openai_prompt = out.get("openai_prompt") or {}
+        openai_prompt_rebuilt = out.get("openai_prompt") or {}
+        openai_prompt_rebuilt["lyrics_brief"] = out.get("lyrics_brief") or ""
+        gen.openai_prompt = openai_prompt_rebuilt
         suno_payload = out.get("suno_payload") or {}
         gen.suno_request = suno_payload
         db.session.commit()
-
         prompt = (suno_payload.get("prompt") or "").strip()
 
-    # If still empty, fail
     if not prompt:
         gen.status = "failed"
         gen.result_json = {"error": "Missing/empty prompt in suno_request."}
@@ -605,48 +634,47 @@ def _run_generation_pipeline_impl(generation_id: int):
 
     suno_base_url = current_app.config.get("SUNO_BASE_URL", "") or os.getenv("SUNO_BASE_URL", "https://api.sunoapi.org")
     suno_api_key = current_app.config.get("SUNO_API_KEY", "") or os.getenv("SUNO_API_KEY", "")
-
     suno = SunoClient(
         base_url=suno_base_url,
-        api_key=suno_api_key,  # Changed from default_cookie to api_key
+        api_key=suno_api_key,
         timeout_s=int(os.getenv("SUNO_TIMEOUT_S", "180")),
     )
 
-    prompt = (suno_payload.get("prompt") or "").strip()
-    if not prompt:
-        gen.status = "failed"
-        gen.result_json = {"error": "OpenAI prompt generation returned empty prompt."}
-        db.session.commit()
-        return {"ok": False, "error": "Empty prompt"}
-
-    # --- NEW V1 LOGIC START ---
-
-    # 1. Prepare parameters for the V1 API
-    # Handle both old format ("make_instrumental") and new format ("instrumental")
     is_instrumental = bool(
         suno_payload.get("instrumental")
         or suno_payload.get("make_instrumental")
         or getattr(gen, "instrumental", False)
     )
-    custom_mode = bool(
-        suno_payload.get("custom_mode")
-        or suno_payload.get("customMode")
-        or getattr(gen, "custom_mode", False)
-    )
-
-    # Ensure strings are valid (defaults if None)
+    custom_mode = True
     style = (suno_payload.get("style") or getattr(gen, "style", "") or "").strip()
     title = (suno_payload.get("title") or getattr(gen, "title", "") or "").strip()
+    negative_tags = (suno_payload.get("negative_tags") or suno_payload.get("negativeTags") or "").strip()
+    vocal_gender = (suno_payload.get("vocal_gender") or suno_payload.get("vocalGender") or "").strip().lower()
+    if vocal_gender not in ("m", "f"):
+        vocal_gender = ""
 
-    # Normalize model name - handle old format and ensure valid V1 API model
-    raw_model = (
-            suno_payload.get("model")
-            or suno_payload.get("desired_model")
-            or current_app.config.get("SUNO_MODEL", "V5")
+    def _num_or_none(value):
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    style_weight = _num_or_none(suno_payload.get("style_weight") or suno_payload.get("styleWeight"))
+    weirdness_constraint = _num_or_none(
+        suno_payload.get("weirdness_constraint") or suno_payload.get("weirdnessConstraint")
     )
-    # Map common variations to valid API model names
+    audio_weight = _num_or_none(suno_payload.get("audio_weight") or suno_payload.get("audioWeight"))
+    persona_id = str(suno_payload.get("persona_id") or suno_payload.get("personaId") or "").strip()
+
+    raw_model = (
+        suno_payload.get("model")
+        or suno_payload.get("desired_model")
+        or current_app.config.get("SUNO_MODEL", "V5")
+    )
     model_map = {
-        "V5": "V5",  # V5 doesn't exist yet, use V4_5ALL
+        "V5": "V5",
         "4.5-ALL": "V5",
         "V45ALL": "V5",
         "V4.5": "V5",
@@ -655,21 +683,107 @@ def _run_generation_pipeline_impl(generation_id: int):
     }
     normalized = str(raw_model).upper().replace("_", "").replace(".", "").replace("-", "")
     model = model_map.get(normalized, raw_model)
-    if model not in ("V4_5ALL", "V4", "V3_5", "V3"):
-        model = "V5"  # Safe default
+    if model not in ("V4_5ALL", "V4", "V3_5", "V3", "V5"):
+        model = "V5"
 
-    # The new API mandates a callback URL.
-    # Use your app's base URL + a callback route (even if you don't have the route handlers yet, it's required)
     app_base = current_app.config.get("APP_BASE_URL", "http://127.0.0.1:7777")
     callback_url = f"{app_base}/callback"
 
-    # Log the actual request being sent for debugging
-    import logging
-    logging.info(
-        f"Suno API Request: prompt={len(prompt)} chars, model={model}, instrumental={is_instrumental}, custom_mode={custom_mode}")
+    # -----------------------------------------------------------------
+    # Lyrics generation step (vocal tracks only)
+    # -----------------------------------------------------------------
+    if not is_instrumental:
+        lyrics_brief = str((getattr(gen, "openai_prompt", None) or {}).get("lyrics_brief") or "").strip()
+        if lyrics_brief:
+            log.info(
+                "[generation] starting lyrics generation generation_id=%s lyrics_brief_len=%d",
+                generation_id,
+                len(lyrics_brief),
+            )
+            try:
+                lyrics_started_at = time.perf_counter()
+                lyrics_resp = suno.generate_lyrics(prompt=lyrics_brief, callback_url=callback_url)
+                lyrics_task_id = (lyrics_resp.get("data") or {}).get("taskId")
+
+                if lyrics_task_id:
+                    log.info(
+                        "[generation] lyrics task created generation_id=%s lyrics_task_id=%s",
+                        generation_id,
+                        lyrics_task_id,
+                    )
+                    lyrics_details = suno.poll_until_lyrics_ready(
+                        task_id=str(lyrics_task_id),
+                        attempts=int(os.getenv("SUNO_LYRICS_POLL_ATTEMPTS", "60")),
+                        sleep_s=float(os.getenv("SUNO_LYRICS_POLL_SLEEP_S", "1")),
+                    )
+                    lyrics_status = ((lyrics_details.get("data") or {}).get("status") or "").upper()
+                    lyrics_ms = int((time.perf_counter() - lyrics_started_at) * 1000)
+
+                    if lyrics_status == "SUCCESS":
+                        lyrics_data = ((lyrics_details.get("data") or {}).get("response") or {}).get("data") or []
+                        if lyrics_data and isinstance(lyrics_data[0], dict):
+                            generated_lyrics = (lyrics_data[0].get("text") or "").strip()
+                            if generated_lyrics:
+                                prompt = generated_lyrics[:5000]
+                                log.info(
+                                    "[generation] lyrics injected generation_id=%s lyrics_len=%d latency_ms=%d",
+                                    generation_id,
+                                    len(prompt),
+                                    lyrics_ms,
+                                )
+                            else:
+                                log.warning(
+                                    "[generation] lyrics SUCCESS but empty text, using original prompt generation_id=%s",
+                                    generation_id,
+                                )
+                        else:
+                            log.warning(
+                                "[generation] lyrics SUCCESS but no data array, using original prompt generation_id=%s",
+                                generation_id,
+                            )
+                    else:
+                        log.warning(
+                            "[generation] lyrics generation status=%s, falling back to original prompt generation_id=%s latency_ms=%d",
+                            lyrics_status,
+                            generation_id,
+                            lyrics_ms,
+                        )
+
+                    gen.result_json = {
+                        **(gen.result_json or {}),
+                        "lyrics_task_id": lyrics_task_id,
+                        "lyrics_status": lyrics_status,
+                        "lyrics_details": lyrics_details,
+                    }
+                    db.session.commit()
+                else:
+                    log.warning(
+                        "[generation] lyrics API returned no taskId, using original prompt generation_id=%s",
+                        generation_id,
+                    )
+            except Exception as lyrics_err:
+                log.warning(
+                    "[generation] lyrics generation failed (%s), using original prompt generation_id=%s",
+                    lyrics_err,
+                    generation_id,
+                )
+        else:
+            log.info(
+                "[generation] no lyrics_brief available, using original prompt generation_id=%s",
+                generation_id,
+            )
+
+    log.info(
+        "[generation] submit task generation_id=%s prompt_len=%s model=%s instrumental=%s custom=%s",
+        generation_id,
+        len(prompt),
+        model,
+        is_instrumental,
+        custom_mode,
+    )
 
     try:
-        # 2. Call the updated SunoClient.generate()
+        suno_submit_started_at = time.perf_counter()
         response = suno.generate(
             prompt=prompt,
             is_instrumental=is_instrumental,
@@ -677,7 +791,19 @@ def _run_generation_pipeline_impl(generation_id: int):
             style=style,
             title=title,
             model=model,
-            callback_url=callback_url
+            callback_url=callback_url,
+            negative_tags=negative_tags,
+            vocal_gender=vocal_gender,
+            style_weight=style_weight,
+            weirdness_constraint=weirdness_constraint,
+            audio_weight=audio_weight,
+            persona_id=persona_id,
+        )
+        suno_submit_ms = int((time.perf_counter() - suno_submit_started_at) * 1000)
+        log.info(
+            "[generation] suno task created generation_id=%s submit_latency_ms=%d",
+            generation_id,
+            suno_submit_ms,
         )
     except Exception as e:
         gen.status = "failed"
@@ -685,34 +811,43 @@ def _run_generation_pipeline_impl(generation_id: int):
         db.session.commit()
         return {"ok": False, "error": str(e)}
 
-    # 3. Parse the V1 response: {"code": 200, "msg": "...", "data": {"taskId": "..."}}
     data = response.get("data", {})
     task_id = data.get("taskId")
-
     if not task_id:
         gen.status = "failed"
         gen.result_json = {"error": "Suno API returned no taskId", "response": response}
         db.session.commit()
         return {"ok": False, "error": "No taskId returned"}
 
-    # 4. Update Generation record
     gen.suno_job_id = str(task_id)
     gen.result_json = {"taskId": task_id, "initial_response": response}
     gen.status = "running"
     db.session.commit()
 
-    # --- NEW: poll official record-info endpoint (callbacks won't reach localhost) ---
     poll_attempts = int(os.getenv("SUNO_POLL_ATTEMPTS", "60"))
-    poll_sleep_s = int(os.getenv("SUNO_POLL_SLEEP_S", "10"))
+    poll_sleep_s = int(os.getenv("SUNO_POLL_SLEEP_S", "2"))
+    log.info(
+        "[generation] polling task_id=%s attempts=%s sleep_s=%s",
+        task_id,
+        poll_attempts,
+        poll_sleep_s,
+    )
 
     try:
+        poll_started_at = time.perf_counter()
         details = suno.poll_until_stream_ready(
             task_id=str(task_id),
             attempts=poll_attempts,
             sleep_s=poll_sleep_s,
         )
+        poll_ms = int((time.perf_counter() - poll_started_at) * 1000)
+        log.info(
+            "[generation] poll returned generation_id=%s task_id=%s latency_ms=%d",
+            generation_id,
+            task_id,
+            poll_ms,
+        )
     except Exception as e:
-        # keep running but store polling error so UI can show it
         gen.result_json = {
             **(gen.result_json or {}),
             "poll_error": str(e),
@@ -723,14 +858,12 @@ def _run_generation_pipeline_impl(generation_id: int):
     data = details.get("data") or {}
     suno_status = (data.get("status") or "").upper()
 
-    # Store latest details for UI/debug
     gen.result_json = {
         **(gen.result_json or {}),
         "record_info": details,
         "suno_status": suno_status,
     }
 
-    # Check if we have streaming URL available (regardless of status)
     response = data.get("response") or {}
     tracks = response.get("sunoData") or response.get("data") or []
     has_stream_url = False
@@ -742,10 +875,203 @@ def _run_generation_pipeline_impl(generation_id: int):
         gen.status = "succeeded"
     elif suno_status in ("TEXT_SUCCESS", "PENDING"):
         gen.status = "running"
-    elif suno_status in ("CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "CALLBACK_EXCEPTION",
-                         "SENSITIVE_WORD_ERROR"):
+    elif suno_status in (
+        "CREATE_TASK_FAILED",
+        "GENERATE_AUDIO_FAILED",
+        "CALLBACK_EXCEPTION",
+        "SENSITIVE_WORD_ERROR",
+    ):
         gen.status = "failed"
-    # else: leave as running
+        failure_reason = (
+            data.get("errorMessage")
+            or data.get("error")
+            or f"Suno generation failed with status: {suno_status or 'UNKNOWN'}"
+        )
+        gen.result_json = {
+            **(gen.result_json or {}),
+            "error": failure_reason,
+        }
+
+    # Fetch similar real-artist songs BEFORE committing "succeeded" so the
+    # frontend poll picks them up together with the result.
+    if gen.status == "succeeded":
+        try:
+            similar = _fetch_similar_songs(gen)
+            if similar:
+                gen.result_json = {**(gen.result_json or {}), "similar_songs": similar}
+        except Exception as e:
+            log.warning("[generation] similar songs fetch failed generation_id=%s: %s", generation_id, e)
 
     db.session.commit()
+
+    total_ms = int((time.perf_counter() - pipeline_started_at) * 1000)
+    log.info(
+        "[generation] pipeline done generation_id=%s task_id=%s status=%s total_ms=%d",
+        generation_id,
+        task_id,
+        gen.status,
+        total_ms,
+    )
     return {"ok": True, "taskId": task_id, "status": gen.status}
+
+
+_SIMILAR_SONGS_FALLBACK = {
+    "chill": [
+        {"title": "Redbone", "artist": "Childish Gambino"},
+        {"title": "Electric Feel", "artist": "MGMT"},
+        {"title": "Tadow", "artist": "Masego & FKJ"},
+        {"title": "Lost in Japan", "artist": "Shawn Mendes"},
+        {"title": "Best Part", "artist": "Daniel Caesar ft. H.E.R."},
+        {"title": "Put Your Records On", "artist": "Corinne Bailey Rae"},
+    ],
+    "happy": [
+        {"title": "Happy", "artist": "Pharrell Williams"},
+        {"title": "Walking on Sunshine", "artist": "Katrina and the Waves"},
+        {"title": "Levitating", "artist": "Dua Lipa"},
+        {"title": "Good as Hell", "artist": "Lizzo"},
+        {"title": "Uptown Funk", "artist": "Bruno Mars"},
+        {"title": "Shut Up and Dance", "artist": "WALK THE MOON"},
+    ],
+    "energetic": [
+        {"title": "Titanium", "artist": "David Guetta ft. Sia"},
+        {"title": "Blinding Lights", "artist": "The Weeknd"},
+        {"title": "Can't Hold Us", "artist": "Macklemore & Ryan Lewis"},
+        {"title": "Stronger", "artist": "Kanye West"},
+        {"title": "Don't Stop Me Now", "artist": "Queen"},
+        {"title": "Levels", "artist": "Avicii"},
+    ],
+    "sad": [
+        {"title": "Someone Like You", "artist": "Adele"},
+        {"title": "Skinny Love", "artist": "Bon Iver"},
+        {"title": "Liability", "artist": "Lorde"},
+        {"title": "Motion Sickness", "artist": "Phoebe Bridgers"},
+        {"title": "All I Want", "artist": "Kodaline"},
+        {"title": "Slow Dancing in the Dark", "artist": "Joji"},
+    ],
+    "focus": [
+        {"title": "Experience", "artist": "Ludovico Einaudi"},
+        {"title": "Weightless", "artist": "Marconi Union"},
+        {"title": "Intro", "artist": "The xx"},
+        {"title": "An Ending (Ascent)", "artist": "Brian Eno"},
+        {"title": "Divenire", "artist": "Ludovico Einaudi"},
+        {"title": "Nuvole Bianche", "artist": "Ludovico Einaudi"},
+    ],
+    "romantic": [
+        {"title": "At Last", "artist": "Etta James"},
+        {"title": "Thinking Out Loud", "artist": "Ed Sheeran"},
+        {"title": "Love On Top", "artist": "Beyoncé"},
+        {"title": "Die With A Smile", "artist": "Lady Gaga & Bruno Mars"},
+        {"title": "Adorn", "artist": "Miguel"},
+        {"title": "The Way You Look Tonight", "artist": "Frank Sinatra"},
+    ],
+    "aggressive": [
+        {"title": "Killing In The Name", "artist": "Rage Against the Machine"},
+        {"title": "HUMBLE.", "artist": "Kendrick Lamar"},
+        {"title": "Bulls on Parade", "artist": "Rage Against the Machine"},
+        {"title": "Lose Yourself", "artist": "Eminem"},
+        {"title": "Enter Sandman", "artist": "Metallica"},
+        {"title": "Bombtrack", "artist": "Rage Against the Machine"},
+    ],
+}
+
+
+def _fetch_similar_songs(gen: Generation):
+    """Return 3 real songs similar to the generated track.
+
+    Tries a Cerebras LLM call first; falls back to a hardcoded mood-based
+    catalog so results are always returned.
+    """
+    import json as _json
+    import random
+
+    # --- Try LLM ---
+    try:
+        result = _fetch_similar_songs_via_llm(gen)
+        if result:
+            return result
+    except Exception as e:
+        log.warning("[generation] similar songs LLM call failed, using fallback: %s", e)
+
+    # --- Deterministic fallback ---
+    mood = (gen.mood or "").strip().lower()
+    pool = _SIMILAR_SONGS_FALLBACK.get(mood) or _SIMILAR_SONGS_FALLBACK.get("energetic", [])
+    if not pool:
+        return None
+    picks = random.sample(pool, min(3, len(pool)))
+    return [{"title": s["title"], "artist": s["artist"]} for s in picks]
+
+
+def _fetch_similar_songs_via_llm(gen: Generation):
+    """Cerebras LLM call for similar song suggestions."""
+    import json as _json
+    import re
+    from cerebras.cloud.sdk import Cerebras
+
+    cerebras_api_key = current_app.config.get("CEREBRAS_API_KEY", "") or os.getenv("CEREBRAS_API_KEY", "")
+    if not cerebras_api_key:
+        return None
+
+    result_json = gen.result_json or {}
+    song_title = ""
+
+    tracks = None
+    for extractor in [
+        lambda r: ((r.get("record_info") or {}).get("data") or {}).get("response", {}).get("sunoData"),
+        lambda r: ((r.get("record_info") or {}).get("data") or {}).get("response", {}).get("data"),
+    ]:
+        tracks = extractor(result_json)
+        if tracks:
+            break
+    if tracks and isinstance(tracks, list) and len(tracks) > 0:
+        song_title = tracks[0].get("title") or ""
+
+    suno_req = gen.suno_request or {}
+    song_style = (suno_req.get("style") or "").strip()
+    mood = gen.mood or ""
+    genre = gen.genre or ""
+
+    context_parts = []
+    if song_title:
+        context_parts.append(f"Title: {song_title}")
+    if song_style:
+        context_parts.append(f"Style: {song_style}")
+    if mood:
+        context_parts.append(f"Mood: {mood}")
+    if genre:
+        context_parts.append(f"Genre: {genre}")
+    context = ". ".join(context_parts) or "Unknown style"
+
+    model = current_app.config.get("LLM_MODEL", "gpt-oss-120b")
+    client = Cerebras(api_key=cerebras_api_key)
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a music recommendation engine. Given a description of a generated song, "
+                    "suggest exactly 3 real songs by real artists that sound similar or fit the same vibe. "
+                    "Return ONLY a JSON array with 3 objects, each having \"title\" and \"artist\" keys. "
+                    "No markdown, no explanation, just the JSON array."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Generated song: {context}",
+            },
+        ],
+        temperature=0.7,
+    )
+
+    text = (resp.choices[0].message.content or "").strip()
+
+    # Strip markdown code fences (```json ... ```, ``` ... ```, etc.)
+    text = re.sub(r"^```[a-zA-Z]*\s*\n?", "", text)
+    text = re.sub(r"\n?```\s*$", "", text)
+    text = text.strip()
+
+    suggestions = _json.loads(text)
+    if isinstance(suggestions, list) and len(suggestions) > 0:
+        return [{"title": s.get("title", ""), "artist": s.get("artist", "")} for s in suggestions[:3]]
+    return None
