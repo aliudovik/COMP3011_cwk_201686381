@@ -370,6 +370,49 @@ class GenerationCrudApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(summary_json["daily_counts"]), 1)
         self.assertIsNotNone(summary_json["recent_generation_at"])
 
+    def test_profile_share_requires_auth(self):
+        with self.client.session_transaction() as sess:
+            sess.pop("user_id", None)
+
+        res = self.client.post("/api/profile/share", json={"listener_profile_id": self.listener_profile_id})
+        self.assertEqual(res.status_code, 401)
+        body = res.get_json()
+        self.assertEqual(body["error"]["code"], "unauthorized")
+
+    def test_profile_share_token_rotation_flow(self):
+        first = self.client.post("/api/profile/share", json={"listener_profile_id": self.listener_profile_id})
+        self.assertEqual(first.status_code, 200)
+        first_json = first.get_json()
+        self.assertTrue(first_json["ok"])
+        self.assertTrue(first_json["token_rotated"])
+        self.assertIn("/vibe/", first_json["share_url"])
+
+        second = self.client.post("/api/profile/share", json={"listener_profile_id": self.listener_profile_id})
+        self.assertEqual(second.status_code, 200)
+        second_json = second.get_json()
+        self.assertFalse(second_json["token_rotated"])
+        self.assertEqual(second_json["share_url"], first_json["share_url"])
+
+        rotated = self.client.post(
+            "/api/profile/share",
+            json={"listener_profile_id": self.listener_profile_id, "rotate_token": True},
+        )
+        self.assertEqual(rotated.status_code, 200)
+        rotated_json = rotated.get_json()
+        self.assertTrue(rotated_json["token_rotated"])
+        self.assertNotEqual(rotated_json["share_url"], first_json["share_url"])
+
+    def test_profile_share_listener_profile_validation(self):
+        bad_id = self.client.post("/api/profile/share", json={"listener_profile_id": "abc"})
+        self.assertEqual(bad_id.status_code, 400)
+        bad_id_json = bad_id.get_json()
+        self.assertEqual(bad_id_json["error"]["code"], "validation_error")
+
+        missing = self.client.post("/api/profile/share", json={"listener_profile_id": 999999})
+        self.assertEqual(missing.status_code, 404)
+        missing_json = missing.get_json()
+        self.assertEqual(missing_json["error"]["code"], "not_found")
+
 
 if __name__ == "__main__":
     unittest.main()

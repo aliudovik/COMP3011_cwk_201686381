@@ -757,8 +757,18 @@ def get_profile():
 @api_bp.post("/profile/share")
 def share_profile():
     body = request.get_json(silent=True) or {}
-    user_id = _resolve_user_id(body)
+    user_id = _require_session_user_id()
+    if not user_id:
+        return _json_error("Not logged in", 401, "unauthorized")
+
     listener_profile_id = body.get("listener_profile_id")
+    rotate_token = bool(body.get("rotate_token"))
+
+    if listener_profile_id is not None:
+        try:
+            listener_profile_id = int(listener_profile_id)
+        except (TypeError, ValueError):
+            return _json_error("listener_profile_id must be an integer", 400, "validation_error")
 
     q = ListenerProfile.query.filter_by(user_id=user_id)
     if listener_profile_id is not None:
@@ -766,24 +776,29 @@ def share_profile():
 
     lp = q.order_by(ListenerProfile.version.desc()).first()
     if not lp:
-        return jsonify({"ok": False, "error": "Profile not found"}), 404
+        return _json_error("Profile not found", 404, "not_found")
 
     profile_json = dict(lp.profile_json or {})
     token = str(profile_json.get("share_token") or "").strip()
-    if not token:
+    rotated = False
+    if rotate_token or not token:
         token = uuid.uuid4().hex
         profile_json["share_token"] = token
+        profile_json["share_token_updated_at"] = _iso_utc_now()
         lp.profile_json = profile_json
         db.session.commit()
+        rotated = True
 
     base_url = request.url_root.rstrip("/")
     share_url = f"{base_url}/vibe/{lp.id}/{token}"
 
-    return jsonify({
-        "ok": True,
-        "listener_profile_id": lp.id,
-        "share_url": share_url,
-    })
+    return _json_ok(
+        {
+            "listener_profile_id": lp.id,
+            "share_url": share_url,
+            "token_rotated": rotated,
+        }
+    )
 
 
 # ---------------------------------------------------------------------

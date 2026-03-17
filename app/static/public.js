@@ -401,8 +401,10 @@
     return `${baseMessage} (request_id: ${rid})`;
   }
 
-  async function shareProfile() {
-    const statusEl = $("diagShareStatus");
+  async function shareProfile(opts = {}) {
+    const rotateToken = !!opts.rotateToken;
+    const statusId = opts.statusId || "diagShareStatus";
+    const statusEl = $(statusId);
 
     if (statusEl) {
       statusEl.textContent = "Creating share link...";
@@ -413,25 +415,30 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_id: gUserId,
           listener_profile_id: gListenerProfileId,
+          rotate_token: rotateToken,
         }),
       });
       const data = await resp.json();
-      if (!resp.ok || !data.ok || !data.share_url) {
-        throw new Error(data.error || "Failed to create share link");
+      if (!resp.ok || !data.ok || !data.share_url || !data.listener_profile_id) {
+        const base = data?.error?.message || data?.error || "Failed to create share link";
+        throw new Error(withRequestIdMessage(base, data));
       }
+
+      gListenerProfileId = data.listener_profile_id;
       const url = data.share_url;
       const copied = await copyTextToClipboard(url);
       if (statusEl) {
-        statusEl.textContent = copied
-          ? "Share link ready. Copied to clipboard."
-          : "Share link ready. Copy might be blocked on this browser.";
+        const action = data.token_rotated ? "Link rotated." : "Share link ready.";
+        const copyMsg = copied
+          ? "Copied to clipboard."
+          : "Copy might be blocked on this browser.";
+        statusEl.textContent = `${action} ${copyMsg}`;
         show(statusEl);
       }
     } catch (e) {
       if (statusEl) {
-        statusEl.textContent = "Could not create share link right now.";
+        statusEl.textContent = e?.message || "Could not create share link right now.";
         show(statusEl);
       }
       console.error("Share profile error:", e);
@@ -2901,7 +2908,14 @@
     const diagShareBtn = $("diagShareBtn");
     if (diagShareBtn) {
       diagShareBtn.addEventListener("click", () => {
-        shareProfile();
+        shareProfile({ statusId: "diagShareStatus", rotateToken: false });
+      });
+    }
+
+    const diagShareRotateBtn = $("diagShareRotateBtn");
+    if (diagShareRotateBtn) {
+      diagShareRotateBtn.addEventListener("click", () => {
+        shareProfile({ statusId: "diagShareStatus", rotateToken: true });
       });
     }
 
@@ -3132,7 +3146,14 @@
     const psychShareBtn = $("psychShareBtn");
     if (psychShareBtn) {
       psychShareBtn.addEventListener("click", () => {
-        shareProfile();
+        shareProfile({ statusId: "psychShareStatus", rotateToken: false });
+      });
+    }
+
+    const psychShareRotateBtn = $("psychShareRotateBtn");
+    if (psychShareRotateBtn) {
+      psychShareRotateBtn.addEventListener("click", () => {
+        shareProfile({ statusId: "psychShareStatus", rotateToken: true });
       });
     }
 
