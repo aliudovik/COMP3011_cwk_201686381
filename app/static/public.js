@@ -373,6 +373,12 @@
     });
   }
 
+  function withRequestIdMessage(baseMessage, payload) {
+    const rid = payload && typeof payload === "object" ? payload.request_id : null;
+    if (!rid) return baseMessage;
+    return `${baseMessage} (request_id: ${rid})`;
+  }
+
   async function shareProfile() {
     const statusEl = $("diagShareStatus");
 
@@ -2156,7 +2162,8 @@
       if (data.ok && data.generation_id) {
         pollGeneration(data.generation_id);
       } else {
-        throw new Error(data.error || "Generation failed to start");
+        const message = data?.error?.message || data?.error || "Generation failed to start";
+        throw new Error(withRequestIdMessage(message, data));
       }
     } catch (e) {
       stopGeneratingScreen();
@@ -2212,7 +2219,8 @@
         } else if (data.status === "failed") {
           stopGeneratingScreen();
           switchScreen("screenMood");
-          alert("Generation failed: " + (data.error || "Unknown error"));
+          const baseError = data.error || "Unknown error";
+          alert(withRequestIdMessage("Generation failed: " + baseError, data));
         } else {
           scheduleNextPoll();
         }

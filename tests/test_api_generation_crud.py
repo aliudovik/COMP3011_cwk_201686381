@@ -101,6 +101,9 @@ class GenerationCrudApiTests(unittest.TestCase):
 
         read_res = self.client.get(f"/api/generation/{generation_id}")
         self.assertEqual(read_res.status_code, 200)
+        read_json = read_res.get_json()
+        self.assertIn("request_id", read_json)
+        self.assertIn("server_time", read_json)
 
         patch_res = self.client.patch(
             f"/api/generation/{generation_id}",
@@ -116,6 +119,9 @@ class GenerationCrudApiTests(unittest.TestCase):
 
         read_deleted_res = self.client.get(f"/api/generation/{generation_id}")
         self.assertEqual(read_deleted_res.status_code, 404)
+        read_deleted_json = read_deleted_res.get_json()
+        self.assertIn("request_id", read_deleted_json)
+        self.assertIn("server_time", read_deleted_json)
 
     def test_update_generation_requires_auth(self):
         with patch("app.routes.api.enqueue", return_value=DummyJob()):

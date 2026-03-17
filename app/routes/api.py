@@ -7,7 +7,7 @@ import time
 import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from sqlalchemy import func
 
 log = logging.getLogger("drvibey.api")
@@ -111,15 +111,41 @@ def _set_generation_mood(gen: Generation, mood_value) -> None:
         setattr(gen, "mood_key", mood)
 
 
+def _iso_utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _request_id() -> str:
+    rid = getattr(g, "request_id", None)
+    if rid:
+        return rid
+
+    incoming = (request.headers.get("X-Request-Id") or "").strip()
+    rid = incoming or uuid.uuid4().hex
+    g.request_id = rid
+    return rid
+
+
 def _json_ok(payload: dict, status: int = 200):
-    out = {"ok": True}
+    out = {
+        "ok": True,
+        "request_id": _request_id(),
+        "server_time": _iso_utc_now(),
+    }
     if isinstance(payload, dict):
         out.update(payload)
     return jsonify(out), status
 
 
 def _json_error(message: str, status: int, code: str):
-    return jsonify({"ok": False, "error": {"code": code, "message": message}}), status
+    return jsonify(
+        {
+            "ok": False,
+            "request_id": _request_id(),
+            "server_time": _iso_utc_now(),
+            "error": {"code": code, "message": message},
+        }
+    ), status
 
 
 def _require_session_user_id():
