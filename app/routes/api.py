@@ -744,6 +744,18 @@ def list_generations():
     if not user_id:
         return jsonify({"ok": False, "error": "Not logged in"}), 401
 
+    status = (request.args.get("status") or "").strip().lower()
+    mood = (request.args.get("mood") or "").strip().lower()
+    activity = (request.args.get("activity") or "").strip().lower()
+
+    allowed_statuses = {"queued", "running", "succeeded", "failed"}
+    if status and status not in allowed_statuses:
+        return _json_error(
+            "status must be one of queued, running, succeeded, failed",
+            400,
+            "validation_error",
+        )
+
     limit_raw = request.args.get("limit", "20")
     offset_raw = request.args.get("offset", "0")
     try:
@@ -757,9 +769,16 @@ def list_generations():
     if offset < 0:
         return _json_error("offset must be zero or greater", 400, "validation_error")
 
+    query = Generation.query.filter_by(user_id=user_id)
+    if status:
+        query = query.filter(Generation.status == status)
+    if mood:
+        query = query.filter(Generation.mood == mood)
+    if activity:
+        query = query.filter(Generation.activity == activity)
+
     gens = (
-        Generation.query
-        .filter_by(user_id=user_id)
+        query
         .order_by(Generation.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -806,6 +825,11 @@ def list_generations():
                 "limit": limit,
                 "offset": offset,
                 "returned": len(items),
+            },
+            "filters": {
+                "status": status or None,
+                "mood": mood or None,
+                "activity": activity or None,
             },
         }
     )

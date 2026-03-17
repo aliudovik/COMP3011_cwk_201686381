@@ -62,6 +62,7 @@
   let gRecentPageOffset = 0;
   let gRecentHasMore = true;
   let gRecentIsLoading = false;
+  let gRecentFilters = { status: "", mood: "", activity: "" };
 
   const SKIP_TOKEN = "[skipped]";
   const TOTAL_QUESTIONS = 10;
@@ -343,6 +344,23 @@
         tDur.textContent = duration > 0 ? msToTime(duration) : "00:00";
       }
     }
+  }
+
+  function applyRecentGenerationFilters() {
+    gRecentFilters = readRecentFiltersFromUi();
+    loadRecentGenerations({ reset: true });
+  }
+
+  function clearRecentGenerationFilters() {
+    const statusEl = $("genFilterStatus");
+    const moodEl = $("genFilterMood");
+    const activityEl = $("genFilterActivity");
+    if (statusEl) statusEl.value = "";
+    if (moodEl) moodEl.value = "";
+    if (activityEl) activityEl.value = "";
+
+    gRecentFilters = { status: "", mood: "", activity: "" };
+    loadRecentGenerations({ reset: true });
   }
 
   function copyTextToClipboard(text) {
@@ -791,6 +809,17 @@
     listEl.appendChild(item);
   }
 
+  function readRecentFiltersFromUi() {
+    const statusEl = $("genFilterStatus");
+    const moodEl = $("genFilterMood");
+    const activityEl = $("genFilterActivity");
+    return {
+      status: (statusEl?.value || "").trim().toLowerCase(),
+      mood: (moodEl?.value || "").trim().toLowerCase(),
+      activity: (activityEl?.value || "").trim().toLowerCase(),
+    };
+  }
+
   async function loadRecentGenerations(opts = {}) {
     const reset = opts.reset !== false;
     const listEl = $("genList");
@@ -819,7 +848,14 @@
     }
 
     try {
-      const resp = await fetch(`/api/generations?limit=${gRecentPageLimit}&offset=${gRecentPageOffset}`);
+      const qs = new URLSearchParams();
+      qs.set("limit", String(gRecentPageLimit));
+      qs.set("offset", String(gRecentPageOffset));
+      if (gRecentFilters.status) qs.set("status", gRecentFilters.status);
+      if (gRecentFilters.mood) qs.set("mood", gRecentFilters.mood);
+      if (gRecentFilters.activity) qs.set("activity", gRecentFilters.activity);
+
+      const resp = await fetch(`/api/generations?${qs.toString()}`);
       const data = await resp.json();
 
       if (data.ok && data.generations && data.generations.length > 0) {
@@ -2572,6 +2608,36 @@
     if (genLoadMoreBtn) {
       genLoadMoreBtn.addEventListener("click", () => {
         loadRecentGenerations({ reset: false });
+      });
+    }
+
+    const genFilterApplyBtn = $("genFilterApplyBtn");
+    if (genFilterApplyBtn) {
+      genFilterApplyBtn.addEventListener("click", applyRecentGenerationFilters);
+    }
+
+    const genFilterClearBtn = $("genFilterClearBtn");
+    if (genFilterClearBtn) {
+      genFilterClearBtn.addEventListener("click", clearRecentGenerationFilters);
+    }
+
+    const genFilterMood = $("genFilterMood");
+    if (genFilterMood) {
+      genFilterMood.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          applyRecentGenerationFilters();
+        }
+      });
+    }
+
+    const genFilterActivity = $("genFilterActivity");
+    if (genFilterActivity) {
+      genFilterActivity.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          applyRecentGenerationFilters();
+        }
       });
     }
 

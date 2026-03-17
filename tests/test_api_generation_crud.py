@@ -179,6 +179,46 @@ class GenerationCrudApiTests(unittest.TestCase):
         bad_offset_json = bad_offset.get_json()
         self.assertEqual(bad_offset_json["error"]["code"], "validation_error")
 
+    def test_generations_list_filtering(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            first = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "focus", "activity": "studying"},
+            )
+            second = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "chill", "activity": "driving"},
+            )
+
+        first_id = first.get_json()["generation_id"]
+        second_id = second.get_json()["generation_id"]
+
+        with self.app.app_context():
+            second_gen = Generation.query.get(second_id)
+            second_gen.status = "failed"
+            db.session.commit()
+
+        mood_filtered = self.client.get("/api/generations?mood=focus")
+        self.assertEqual(mood_filtered.status_code, 200)
+        mood_filtered_json = mood_filtered.get_json()
+        self.assertEqual(len(mood_filtered_json["generations"]), 1)
+        self.assertEqual(mood_filtered_json["generations"][0]["id"], first_id)
+        self.assertEqual(mood_filtered_json["filters"]["mood"], "focus")
+
+        combined_filtered = self.client.get("/api/generations?status=failed&activity=driving")
+        self.assertEqual(combined_filtered.status_code, 200)
+        combined_filtered_json = combined_filtered.get_json()
+        self.assertEqual(len(combined_filtered_json["generations"]), 1)
+        self.assertEqual(combined_filtered_json["generations"][0]["id"], second_id)
+        self.assertEqual(combined_filtered_json["filters"]["status"], "failed")
+        self.assertEqual(combined_filtered_json["filters"]["activity"], "driving")
+
+    def test_generations_list_filtering_validation(self):
+        bad_status = self.client.get("/api/generations?status=done")
+        self.assertEqual(bad_status.status_code, 400)
+        bad_status_json = bad_status.get_json()
+        self.assertEqual(bad_status_json["error"]["code"], "validation_error")
+
 
 if __name__ == "__main__":
     unittest.main()

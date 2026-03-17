@@ -162,6 +162,21 @@
     <!-- SCREEN: HOME (Recent Generations) -->
     <section id="screenHome" class="screen is-hidden">
       <div class="home-header">Recent Generations</div>
+      <div class="home-filters">
+        <select id="genFilterStatus" class="home-filter-input" aria-label="Filter by status">
+          <option value="">All statuses</option>
+          <option value="queued">Queued</option>
+          <option value="running">Running</option>
+          <option value="succeeded">Succeeded</option>
+          <option value="failed">Failed</option>
+        </select>
+        <input id="genFilterMood" class="home-filter-input" type="text" placeholder="Mood (e.g. chill)" aria-label="Filter by mood" />
+        <input id="genFilterActivity" class="home-filter-input" type="text" placeholder="Activity (e.g. studying)" aria-label="Filter by activity" />
+        <div class="home-filter-actions">
+          <button id="genFilterApplyBtn" class="chip-btn" type="button">Apply</button>
+          <button id="genFilterClearBtn" class="chip-btn" type="button">Clear</button>
+        </div>
+      </div>
       <div id="genList" class="gen-list">
         <!-- Rendered by JS -->
       </div>
