@@ -116,13 +116,18 @@ class GenerationCrudApiTests(unittest.TestCase):
         self.assertEqual(set(patch_json["updated_fields"]), {"genre", "bpm", "mood_intensity"})
 
         delete_res = self.client.delete(f"/api/generation/{generation_id}")
-        self.assertEqual(delete_res.status_code, 204)
+        self.assertEqual(delete_res.status_code, 200)
+        delete_json = delete_res.get_json()
+        self.assertTrue(delete_json["ok"])
+        self.assertFalse(delete_json["already_deleted"])
+        self.assertIsNotNone(delete_json["deleted_at"])
 
         read_deleted_res = self.client.get(f"/api/generation/{generation_id}")
-        self.assertEqual(read_deleted_res.status_code, 404)
+        self.assertEqual(read_deleted_res.status_code, 410)
         read_deleted_json = read_deleted_res.get_json()
         self.assertIn("request_id", read_deleted_json)
         self.assertIn("server_time", read_deleted_json)
+        self.assertEqual(read_deleted_json["error"]["code"], "generation_deleted")
 
     def test_update_generation_requires_auth(self):
         with patch("app.routes.api.enqueue", return_value=DummyJob()):
@@ -245,6 +250,65 @@ class GenerationCrudApiTests(unittest.TestCase):
         self.assertEqual(bad_status.status_code, 400)
         bad_status_json = bad_status.get_json()
         self.assertEqual(bad_status_json["error"]["code"], "validation_error")
+
+    def test_soft_delete_visibility_and_guards(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            create_res = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "focus", "activity": "studying"},
+            )
+        generation_id = create_res.get_json()["generation_id"]
+
+        first_delete = self.client.delete(f"/api/generation/{generation_id}")
+        self.assertEqual(first_delete.status_code, 200)
+        first_delete_json = first_delete.get_json()
+        self.assertFalse(first_delete_json["already_deleted"])
+
+        second_delete = self.client.delete(f"/api/generation/{generation_id}")
+        self.assertEqual(second_delete.status_code, 200)
+        second_delete_json = second_delete.get_json()
+        self.assertTrue(second_delete_json["already_deleted"])
+
+        normal_list = self.client.get("/api/generations")
+        self.assertEqual(normal_list.status_code, 200)
+        normal_list_json = normal_list.get_json()
+        self.assertEqual(len(normal_list_json["generations"]), 0)
+
+        include_deleted_list = self.client.get("/api/generations?include_deleted=true")
+        self.assertEqual(include_deleted_list.status_code, 200)
+        include_deleted_json = include_deleted_list.get_json()
+        self.assertEqual(len(include_deleted_json["generations"]), 1)
+        self.assertEqual(include_deleted_json["generations"][0]["status"], "deleted")
+        self.assertIsNotNone(include_deleted_json["generations"][0]["deleted_at"])
+
+        only_deleted_list = self.client.get("/api/generations?status=deleted")
+        self.assertEqual(only_deleted_list.status_code, 200)
+        only_deleted_json = only_deleted_list.get_json()
+        self.assertEqual(len(only_deleted_json["generations"]), 1)
+
+        patch_deleted = self.client.patch(
+            f"/api/generation/{generation_id}",
+            json={"genre": "ambient"},
+        )
+        self.assertEqual(patch_deleted.status_code, 410)
+        patch_deleted_json = patch_deleted.get_json()
+        self.assertEqual(patch_deleted_json["error"]["code"], "generation_deleted")
+
+        fav_deleted = self.client.patch(
+            f"/api/generation/{generation_id}/favourite",
+            json={"is_favourite": True},
+        )
+        self.assertEqual(fav_deleted.status_code, 410)
+        fav_deleted_json = fav_deleted.get_json()
+        self.assertEqual(fav_deleted_json["error"]["code"], "generation_deleted")
+
+        like_deleted = self.client.patch(
+            f"/api/generation/{generation_id}/like",
+            json={"like_status": "liked"},
+        )
+        self.assertEqual(like_deleted.status_code, 410)
+        like_deleted_json = like_deleted.get_json()
+        self.assertEqual(like_deleted_json["error"]["code"], "generation_deleted")
 
 
 if __name__ == "__main__":

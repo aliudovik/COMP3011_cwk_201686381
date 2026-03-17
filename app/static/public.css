@@ -2525,6 +2525,16 @@ a { text-decoration: none; color: inherit; }
   background: #f9f9f9;
 }
 
+.gen-list-item.is-deleted {
+  opacity: 0.72;
+  border-style: dashed;
+  background: #fbfbfb;
+}
+
+.gen-list-item.is-deleted:hover {
+  background: #fbfbfb;
+}
+
 .gen-thumb {
   width: 44px;
   height: 44px;

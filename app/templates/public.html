@@ -169,6 +169,7 @@
           <option value="running">Running</option>
           <option value="succeeded">Succeeded</option>
           <option value="failed">Failed</option>
+          <option value="deleted">Deleted</option>
         </select>
         <input id="genFilterMood" class="home-filter-input" type="text" placeholder="Mood (e.g. chill)" aria-label="Filter by mood" />
         <input id="genFilterActivity" class="home-filter-input" type="text" placeholder="Activity (e.g. studying)" aria-label="Filter by activity" />
@@ -736,10 +737,17 @@
   <!-- Firebase JS SDK (compat mode) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script id="firebaseConfigJson" type="application/json">{{ firebase_config | tojson }}</script>
   <script>
     // Initialize Firebase with full project config (passed from server)
     (function() {
-      var cfg = {{ firebase_config | tojson }};
+      var cfg = {};
+      try {
+        var cfgScript = document.getElementById("firebaseConfigJson");
+        cfg = cfgScript ? JSON.parse(cfgScript.textContent || "{}") : {};
+      } catch (e) {
+        cfg = {};
+      }
       if (cfg && cfg.apiKey && cfg.projectId) {
         firebase.initializeApp(cfg);
         console.log("[Firebase] initialized for project:", cfg.projectId);

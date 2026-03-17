@@ -758,6 +758,9 @@
     const item = document.createElement("div");
     item.className = "gen-list-item";
     item.dataset.genId = gen.id;
+    if (gen.status === "deleted") {
+      item.classList.add("is-deleted");
+    }
 
     const thumb = document.createElement("div");
     thumb.className = "gen-thumb";
@@ -775,7 +778,9 @@
 
     const title = document.createElement("div");
     title.className = "gen-title";
-    title.textContent = gen.title || "Untitled Track";
+    title.textContent = gen.status === "deleted"
+      ? (gen.title || "Deleted generation")
+      : (gen.title || "Untitled Track");
 
     const meta = document.createElement("div");
     meta.className = "gen-meta";
@@ -939,6 +944,9 @@
         switchScreen("screenResult");
         return;
       }
+      if (data?.error?.code === "generation_deleted") {
+        alert(withRequestIdMessage("This generation was deleted.", data));
+      }
     } catch (e) {
       console.error("Load generation error:", e);
     }
@@ -980,6 +988,8 @@
       if (data.ok) {
         gCurrentGenIsFavourite = data.is_favourite;
         updateFavButton();
+      } else if (data?.error?.code === "generation_deleted") {
+        alert(withRequestIdMessage("This generation was deleted.", data));
       }
     } catch (e) {
       console.error("Toggle favourite error:", e);
@@ -1019,6 +1029,8 @@
       if (data.ok) {
         gCurrentGenLikeStatus = data.like_status;
         updateLikeButtons();
+      } else if (data?.error?.code === "generation_deleted") {
+        alert(withRequestIdMessage("This generation was deleted.", data));
       }
     } catch (e) {
       console.error("Toggle like error:", e);

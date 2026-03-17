@@ -174,6 +174,7 @@ def _generation_summary(gen: Generation) -> dict:
         "status": gen.status,
         "is_favourite": bool(gen.is_favourite),
         "like_status": gen.like_status,
+        "deleted_at": gen.deleted_at.isoformat() if gen.deleted_at else None,
         "created_at": gen.created_at.isoformat() if gen.created_at else None,
     }
 
@@ -356,6 +357,8 @@ def generation_status(generation_id: int):
     user_id = _require_session_user_id()
     if user_id and gen.user_id != user_id:
         return _json_error("Forbidden", 403, "forbidden")
+    if gen.deleted_at:
+        return _json_error("Generation was deleted", 410, "generation_deleted")
 
     status = gen.status or "unknown"
     result = gen.result_json or {}
@@ -393,6 +396,8 @@ def update_generation(generation_id: int):
     gen = Generation.query.filter_by(id=generation_id, user_id=user_id).first()
     if not gen:
         return _json_error("Generation not found", 404, "not_found")
+    if gen.deleted_at:
+        return _json_error("Generation was deleted", 410, "generation_deleted")
 
     body = request.get_json(silent=True) or {}
     if not isinstance(body, dict) or not body:
@@ -502,9 +507,27 @@ def delete_generation(generation_id: int):
     if not gen:
         return _json_error("Generation not found", 404, "not_found")
 
-    db.session.delete(gen)
+    if gen.deleted_at:
+        return _json_ok(
+            {
+                "generation_id": gen.id,
+                "deleted_at": gen.deleted_at.isoformat(),
+                "already_deleted": True,
+            }
+        )
+
+    gen.deleted_at = datetime.now(timezone.utc)
+    gen.is_favourite = False
+    gen.like_status = None
+    gen.status = "deleted"
     db.session.commit()
-    return "", 204
+    return _json_ok(
+        {
+            "generation_id": gen.id,
+            "deleted_at": gen.deleted_at.isoformat(),
+            "already_deleted": False,
+        }
+    )
 
 
 # =====================================================================
@@ -777,14 +800,17 @@ def list_generations():
     status = (request.args.get("status") or "").strip().lower()
     mood = (request.args.get("mood") or "").strip().lower()
     activity = (request.args.get("activity") or "").strip().lower()
+    include_deleted = (request.args.get("include_deleted") or "").strip().lower() in {"1", "true", "yes"}
 
-    allowed_statuses = {"queued", "running", "succeeded", "failed"}
+    allowed_statuses = {"queued", "running", "succeeded", "failed", "deleted"}
     if status and status not in allowed_statuses:
         return _json_error(
-            "status must be one of queued, running, succeeded, failed",
+            "status must be one of queued, running, succeeded, failed, deleted",
             400,
             "validation_error",
         )
+    if status == "deleted":
+        include_deleted = True
 
     limit_raw = request.args.get("limit", "20")
     offset_raw = request.args.get("offset", "0")
@@ -800,6 +826,8 @@ def list_generations():
         return _json_error("offset must be zero or greater", 400, "validation_error")
 
     query = Generation.query.filter_by(user_id=user_id)
+    if not include_deleted:
+        query = query.filter(Generation.deleted_at.is_(None))
     if status:
         query = query.filter(Generation.status == status)
     if mood:
@@ -821,9 +849,10 @@ def list_generations():
             "id": g.id,
             "mood": g.mood,
             "activity": g.activity,
-            "status": g.status,
+            "status": "deleted" if g.deleted_at else g.status,
             "is_favourite": bool(g.is_favourite),
             "like_status": g.like_status,
+            "deleted_at": g.deleted_at.isoformat() if g.deleted_at else None,
             "created_at": g.created_at.isoformat() if g.created_at else None,
             "title": None,
             "cover_url": None,
@@ -860,6 +889,7 @@ def list_generations():
                 "status": status or None,
                 "mood": mood or None,
                 "activity": activity or None,
+                "include_deleted": include_deleted,
             },
         }
     )
@@ -879,6 +909,7 @@ def list_favourites():
     gens = (
         Generation.query
         .filter_by(user_id=user_id, is_favourite=True)
+        .filter(Generation.deleted_at.is_(None))
         .order_by(Generation.created_at.desc())
         .limit(50)
         .all()
@@ -934,6 +965,8 @@ def toggle_favourite(generation_id: int):
     gen = Generation.query.filter_by(id=generation_id, user_id=user_id).first()
     if not gen:
         return _json_error("Generation not found", 404, "not_found")
+    if gen.deleted_at:
+        return _json_error("Generation was deleted", 410, "generation_deleted")
 
     body = request.get_json(silent=True) or {}
     if "is_favourite" in body:
@@ -960,6 +993,8 @@ def set_like_status(generation_id: int):
     gen = Generation.query.filter_by(id=generation_id, user_id=user_id).first()
     if not gen:
         return _json_error("Generation not found", 404, "not_found")
+    if gen.deleted_at:
+        return _json_error("Generation was deleted", 410, "generation_deleted")
 
     body = request.get_json(silent=True) or {}
     new_status = body.get("like_status")
