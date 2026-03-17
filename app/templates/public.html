@@ -162,6 +162,27 @@
     <!-- SCREEN: HOME (Recent Generations) -->
     <section id="screenHome" class="screen is-hidden">
       <div class="home-header">Recent Generations</div>
+      <div id="homeAnalyticsPanel" class="home-analytics is-hidden" aria-live="polite">
+        <div class="home-analytics-title">Your 30-day snapshot</div>
+        <div class="home-analytics-grid">
+          <div class="home-analytics-card">
+            <div class="home-analytics-label">Total</div>
+            <div id="analyticsTotal" class="home-analytics-value">0</div>
+          </div>
+          <div class="home-analytics-card">
+            <div class="home-analytics-label">Success rate</div>
+            <div id="analyticsSuccessRate" class="home-analytics-value">0%</div>
+          </div>
+          <div class="home-analytics-card">
+            <div class="home-analytics-label">Favourites</div>
+            <div id="analyticsFavourites" class="home-analytics-value">0</div>
+          </div>
+          <div class="home-analytics-card">
+            <div class="home-analytics-label">Top mood</div>
+            <div id="analyticsTopMood" class="home-analytics-value">—</div>
+          </div>
+        </div>
+      </div>
       <div class="home-filters">
         <select id="genFilterStatus" class="home-filter-input" aria-label="Filter by status">
           <option value="">All statuses</option>

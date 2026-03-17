@@ -310,6 +310,66 @@ class GenerationCrudApiTests(unittest.TestCase):
         like_deleted_json = like_deleted.get_json()
         self.assertEqual(like_deleted_json["error"]["code"], "generation_deleted")
 
+    def test_generation_analytics_summary_expanded_fields(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            first = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "focus", "activity": "studying"},
+            )
+            second = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "chill", "activity": "driving"},
+            )
+            third = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "happy", "activity": "partying"},
+            )
+
+        first_id = first.get_json()["generation_id"]
+        second_id = second.get_json()["generation_id"]
+        third_id = third.get_json()["generation_id"]
+
+        with self.app.app_context():
+            first_gen = Generation.query.get(first_id)
+            second_gen = Generation.query.get(second_id)
+            third_gen = Generation.query.get(third_id)
+
+            first_gen.status = "succeeded"
+            first_gen.is_favourite = True
+            first_gen.like_status = "liked"
+
+            second_gen.status = "failed"
+            second_gen.like_status = "disliked"
+
+            third_gen.status = "queued"
+
+            db.session.commit()
+
+        delete_res = self.client.delete(f"/api/generation/{third_id}")
+        self.assertEqual(delete_res.status_code, 200)
+
+        summary_res = self.client.get("/api/analytics/generations/summary?days=30")
+        self.assertEqual(summary_res.status_code, 200)
+        summary_json = summary_res.get_json()
+        self.assertTrue(summary_json["ok"])
+
+        self.assertEqual(summary_json["window_days"], 30)
+        self.assertEqual(summary_json["total_generations"], 3)
+        self.assertEqual(summary_json["active_generations"], 2)
+        self.assertEqual(summary_json["deleted_count"], 1)
+        self.assertEqual(summary_json["favourite_count"], 1)
+        self.assertEqual(summary_json["favourite_rate"], 0.3333)
+        self.assertEqual(summary_json["succeeded_count"], 1)
+        self.assertEqual(summary_json["failed_count"], 1)
+        self.assertEqual(summary_json["success_rate"], 0.5)
+        self.assertEqual(summary_json["like_breakdown"]["liked"], 1)
+        self.assertEqual(summary_json["like_breakdown"]["disliked"], 1)
+        self.assertEqual(summary_json["like_breakdown"]["neutral"], 0)
+
+        self.assertIsInstance(summary_json["daily_counts"], list)
+        self.assertGreaterEqual(len(summary_json["daily_counts"]), 1)
+        self.assertIsNotNone(summary_json["recent_generation_at"])
+
 
 if __name__ == "__main__":
     unittest.main()

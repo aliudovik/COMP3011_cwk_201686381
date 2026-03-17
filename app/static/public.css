@@ -2474,6 +2474,46 @@ a { text-decoration: none; color: inherit; }
   margin-bottom: 4px;
 }
 
+.home-analytics {
+  border: 2px solid #111;
+  border-radius: 14px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+
+.home-analytics-title {
+  font-size: 12px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.home-analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.home-analytics-card {
+  border: 2px solid #111;
+  border-radius: 10px;
+  padding: 8px;
+  background: #f8f8f8;
+}
+
+.home-analytics-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #666;
+}
+
+.home-analytics-value {
+  margin-top: 2px;
+  font-size: 14px;
+  font-weight: 900;
+  color: #111;
+}
+
 .home-filters {
   display: flex;
   flex-direction: column;

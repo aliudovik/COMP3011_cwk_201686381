@@ -825,6 +825,48 @@
     };
   }
 
+  function renderHomeAnalytics(summary) {
+    const panelEl = $("homeAnalyticsPanel");
+    if (!panelEl || !summary || typeof summary !== "object") return;
+
+    const totalEl = $("analyticsTotal");
+    const successRateEl = $("analyticsSuccessRate");
+    const favouritesEl = $("analyticsFavourites");
+    const topMoodEl = $("analyticsTopMood");
+
+    const total = Number(summary.total_generations || 0);
+    const successRate = Number(summary.success_rate || 0);
+    const favourites = Number(summary.favourite_count || 0);
+    const topMood = Array.isArray(summary.top_moods) && summary.top_moods.length > 0
+      ? (summary.top_moods[0].mood || "—")
+      : "—";
+
+    if (totalEl) totalEl.textContent = String(total);
+    if (successRateEl) successRateEl.textContent = `${Math.round(successRate * 100)}%`;
+    if (favouritesEl) favouritesEl.textContent = String(favourites);
+    if (topMoodEl) topMoodEl.textContent = topMood;
+
+    show(panelEl);
+  }
+
+  async function loadHomeAnalytics(days = 30) {
+    const panelEl = $("homeAnalyticsPanel");
+    if (!panelEl) return;
+
+    try {
+      const resp = await fetch(`/api/analytics/generations/summary?days=${days}`);
+      const data = await resp.json();
+      if (resp.ok && data.ok) {
+        renderHomeAnalytics(data);
+      } else {
+        hide(panelEl);
+      }
+    } catch (e) {
+      console.error("Load analytics error:", e);
+      hide(panelEl);
+    }
+  }
+
   async function loadRecentGenerations(opts = {}) {
     const reset = opts.reset !== false;
     const listEl = $("genList");
@@ -839,6 +881,7 @@
       gRecentHasMore = true;
       listEl.innerHTML = "";
       hide(emptyEl);
+      loadHomeAnalytics(30);
     }
 
     if (!gRecentHasMore) {

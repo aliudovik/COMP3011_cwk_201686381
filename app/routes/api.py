@@ -1023,10 +1023,26 @@ def generation_analytics_summary():
 
     cutoff = _utcnow() - timedelta(days=days)
     base_q = Generation.query.filter(Generation.user_id == user_id, Generation.created_at >= cutoff)
+    active_q = base_q.filter(Generation.deleted_at.is_(None))
 
     total_generations = base_q.count()
-    favourite_count = base_q.filter(Generation.is_favourite.is_(True)).count()
+    active_generations = active_q.count()
+    deleted_count = base_q.filter(Generation.deleted_at.isnot(None)).count()
+    favourite_count = active_q.filter(Generation.is_favourite.is_(True)).count()
     favourite_rate = round((favourite_count / total_generations), 4) if total_generations else 0.0
+
+    succeeded_count = active_q.filter(Generation.status == "succeeded").count()
+    failed_count = active_q.filter(Generation.status == "failed").count()
+    completion_total = succeeded_count + failed_count
+    success_rate = round((succeeded_count / completion_total), 4) if completion_total else 0.0
+
+    like_breakdown = {
+        "liked": active_q.filter(Generation.like_status == "liked").count(),
+        "disliked": active_q.filter(Generation.like_status == "disliked").count(),
+        "neutral": active_generations
+        - active_q.filter(Generation.like_status == "liked").count()
+        - active_q.filter(Generation.like_status == "disliked").count(),
+    }
 
     status_rows = (
         db.session.query(Generation.status, func.count(Generation.id))
@@ -1061,8 +1077,28 @@ def generation_analytics_summary():
         .filter(
             Generation.user_id == user_id,
             Generation.created_at >= cutoff,
+            Generation.deleted_at.is_(None),
             Generation.mood_intensity.isnot(None),
         )
+        .scalar()
+    )
+
+    daily_rows = (
+        db.session.query(func.date(Generation.created_at), func.count(Generation.id))
+        .filter(Generation.user_id == user_id, Generation.created_at >= cutoff)
+        .group_by(func.date(Generation.created_at))
+        .order_by(func.date(Generation.created_at).asc())
+        .all()
+    )
+    daily_counts = [
+        {"date": str(day), "count": int(count)}
+        for day, count in daily_rows
+        if day is not None
+    ]
+
+    recent_generation_at = (
+        db.session.query(func.max(Generation.created_at))
+        .filter(Generation.user_id == user_id, Generation.created_at >= cutoff)
         .scalar()
     )
 
@@ -1070,12 +1106,20 @@ def generation_analytics_summary():
         {
             "window_days": days,
             "total_generations": total_generations,
+            "active_generations": active_generations,
+            "deleted_count": deleted_count,
             "favourite_count": favourite_count,
             "favourite_rate": favourite_rate,
+            "succeeded_count": succeeded_count,
+            "failed_count": failed_count,
+            "success_rate": success_rate,
+            "like_breakdown": like_breakdown,
             "status_breakdown": status_breakdown,
             "top_moods": top_moods,
             "top_activities": top_activities,
             "avg_mood_intensity": round(float(avg_mood_intensity), 4) if avg_mood_intensity is not None else None,
+            "daily_counts": daily_counts,
+            "recent_generation_at": recent_generation_at.isoformat() if recent_generation_at else None,
         }
     )
 
