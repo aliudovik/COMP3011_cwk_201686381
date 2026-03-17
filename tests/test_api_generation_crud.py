@@ -113,6 +113,7 @@ class GenerationCrudApiTests(unittest.TestCase):
         patch_json = patch_res.get_json()
         self.assertEqual(patch_json["generation"]["genre"], "ambient")
         self.assertEqual(patch_json["generation"]["bpm"], 96)
+        self.assertEqual(set(patch_json["updated_fields"]), {"genre", "bpm", "mood_intensity"})
 
         delete_res = self.client.delete(f"/api/generation/{generation_id}")
         self.assertEqual(delete_res.status_code, 204)
@@ -144,6 +145,32 @@ class GenerationCrudApiTests(unittest.TestCase):
             json={"mood_intensity": 9},
         )
         self.assertEqual(patch_res.status_code, 400)
+
+    def test_update_generation_rejects_unknown_fields(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            create_res = self.client.post("/api/generate", json={"user_id": self.user_id, "mood": "focus"})
+        generation_id = create_res.get_json()["generation_id"]
+
+        patch_res = self.client.patch(
+            f"/api/generation/{generation_id}",
+            json={"unexpected_key": "value"},
+        )
+        self.assertEqual(patch_res.status_code, 400)
+        patch_json = patch_res.get_json()
+        self.assertEqual(patch_json["error"]["code"], "validation_error")
+
+    def test_update_generation_rejects_no_changes(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            create_res = self.client.post("/api/generate", json={"user_id": self.user_id, "mood": "focus"})
+        generation_id = create_res.get_json()["generation_id"]
+
+        patch_res = self.client.patch(
+            f"/api/generation/{generation_id}",
+            json={"mood": "focus"},
+        )
+        self.assertEqual(patch_res.status_code, 400)
+        patch_json = patch_res.get_json()
+        self.assertEqual(patch_json["error"]["code"], "validation_error")
 
     def test_generations_list_pagination(self):
         with patch("app.routes.api.enqueue", return_value=DummyJob()):

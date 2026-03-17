@@ -398,15 +398,33 @@ def update_generation(generation_id: int):
     if not isinstance(body, dict) or not body:
         return _json_error("Request body must be a non-empty JSON object", 400, "validation_error")
 
-    mutable_fields = {"activity", "song_reference", "genre", "is_favourite", "like_status"}
-    changed = False
+    allowed_fields = {
+        "mood",
+        "mood_intensity",
+        "bpm",
+        "activity",
+        "song_reference",
+        "genre",
+        "is_favourite",
+        "like_status",
+    }
+    unknown_fields = sorted(set(body.keys()) - allowed_fields)
+    if unknown_fields:
+        return _json_error(
+            f"Unknown fields: {', '.join(unknown_fields)}",
+            400,
+            "validation_error",
+        )
+
+    updated_fields = []
 
     if "mood" in body:
         mood_value = str(body.get("mood") or "").strip().lower()
         if not mood_value:
             return _json_error("mood cannot be empty", 400, "validation_error")
-        _set_generation_mood(gen, mood_value)
-        changed = True
+        if (gen.mood or "") != mood_value:
+            _set_generation_mood(gen, mood_value)
+            updated_fields.append("mood")
 
     if "mood_intensity" in body:
         try:
@@ -415,14 +433,16 @@ def update_generation(generation_id: int):
             return _json_error("mood_intensity must be a number between 0 and 1", 400, "validation_error")
         if mood_intensity < 0 or mood_intensity > 1:
             return _json_error("mood_intensity must be between 0 and 1", 400, "validation_error")
-        gen.mood_intensity = mood_intensity
-        changed = True
+        if gen.mood_intensity != mood_intensity:
+            gen.mood_intensity = mood_intensity
+            updated_fields.append("mood_intensity")
 
     if "bpm" in body:
         bpm_raw = body.get("bpm")
         if bpm_raw in (None, ""):
-            gen.bpm = None
-            changed = True
+            if gen.bpm is not None:
+                gen.bpm = None
+                updated_fields.append("bpm")
         else:
             try:
                 bpm_value = int(bpm_raw)
@@ -430,36 +450,46 @@ def update_generation(generation_id: int):
                 return _json_error("bpm must be an integer", 400, "validation_error")
             if bpm_value < 1:
                 return _json_error("bpm must be a positive integer", 400, "validation_error")
-            gen.bpm = bpm_value
-            changed = True
+            if gen.bpm != bpm_value:
+                gen.bpm = bpm_value
+                updated_fields.append("bpm")
 
-    for key in mutable_fields:
+    for key in ("activity", "song_reference", "genre", "is_favourite", "like_status"):
         if key not in body:
             continue
         if key == "like_status":
             new_status = body.get("like_status")
             if new_status not in ("liked", "disliked", None):
                 return _json_error("like_status must be 'liked', 'disliked', or null", 400, "validation_error")
-            gen.like_status = new_status
-            changed = True
+            if gen.like_status != new_status:
+                gen.like_status = new_status
+                updated_fields.append("like_status")
             continue
         if key == "is_favourite":
-            gen.is_favourite = bool(body.get("is_favourite"))
-            changed = True
+            next_value = bool(body.get("is_favourite"))
+            if bool(gen.is_favourite) != next_value:
+                gen.is_favourite = next_value
+                updated_fields.append("is_favourite")
             continue
 
         value = body.get(key)
+        next_value = str(value).strip() or None
         if value is None:
-            setattr(gen, key, None)
-        else:
-            setattr(gen, key, str(value).strip() or None)
-        changed = True
+            next_value = None
+        if getattr(gen, key) != next_value:
+            setattr(gen, key, next_value)
+            updated_fields.append(key)
 
-    if not changed:
-        return _json_error("No valid updatable fields provided", 400, "validation_error")
+    if not updated_fields:
+        return _json_error("No changes detected", 400, "validation_error")
 
     db.session.commit()
-    return _json_ok({"generation": _generation_summary(gen)})
+    return _json_ok(
+        {
+            "generation": _generation_summary(gen),
+            "updated_fields": updated_fields,
+        }
+    )
 
 
 @api_bp.delete("/generation/<int:generation_id>")
