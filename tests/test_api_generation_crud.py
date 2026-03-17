@@ -145,6 +145,40 @@ class GenerationCrudApiTests(unittest.TestCase):
         )
         self.assertEqual(patch_res.status_code, 400)
 
+    def test_generations_list_pagination(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            self.client.post("/api/generate", json={"user_id": self.user_id, "mood": "focus"})
+            self.client.post("/api/generate", json={"user_id": self.user_id, "mood": "chill"})
+            self.client.post("/api/generate", json={"user_id": self.user_id, "mood": "happy"})
+
+        page_1 = self.client.get("/api/generations?limit=2&offset=0")
+        self.assertEqual(page_1.status_code, 200)
+        page_1_json = page_1.get_json()
+        self.assertTrue(page_1_json["ok"])
+        self.assertEqual(page_1_json["pagination"]["limit"], 2)
+        self.assertEqual(page_1_json["pagination"]["offset"], 0)
+        self.assertEqual(page_1_json["pagination"]["returned"], 2)
+        self.assertEqual(len(page_1_json["generations"]), 2)
+
+        page_2 = self.client.get("/api/generations?limit=2&offset=2")
+        self.assertEqual(page_2.status_code, 200)
+        page_2_json = page_2.get_json()
+        self.assertEqual(page_2_json["pagination"]["limit"], 2)
+        self.assertEqual(page_2_json["pagination"]["offset"], 2)
+        self.assertEqual(page_2_json["pagination"]["returned"], 1)
+        self.assertEqual(len(page_2_json["generations"]), 1)
+
+    def test_generations_list_pagination_validation(self):
+        bad_limit = self.client.get("/api/generations?limit=0&offset=0")
+        self.assertEqual(bad_limit.status_code, 400)
+        bad_limit_json = bad_limit.get_json()
+        self.assertEqual(bad_limit_json["error"]["code"], "validation_error")
+
+        bad_offset = self.client.get("/api/generations?limit=10&offset=-1")
+        self.assertEqual(bad_offset.status_code, 400)
+        bad_offset_json = bad_offset.get_json()
+        self.assertEqual(bad_offset_json["error"]["code"], "validation_error")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -58,6 +58,10 @@
   let gLoadingStartedAtMs = 0;
   let gAuthBackScreenId = "screenChat";
   let gCurrentScreenId = null;
+  let gRecentPageLimit = 10;
+  let gRecentPageOffset = 0;
+  let gRecentHasMore = true;
+  let gRecentIsLoading = false;
 
   const SKIP_TOKEN = "[skipped]";
   const TOTAL_QUESTIONS = 10;
@@ -732,81 +736,118 @@
   }
 
   // ── Home screen (recent generations) ───────────────────────────────
-  async function loadRecentGenerations() {
+  function renderGenerationListItem(gen, listEl) {
+    const item = document.createElement("div");
+    item.className = "gen-list-item";
+    item.dataset.genId = gen.id;
+
+    const thumb = document.createElement("div");
+    thumb.className = "gen-thumb";
+    if (gen.cover_url) {
+      const img = document.createElement("img");
+      img.src = gen.cover_url;
+      img.alt = gen.title || "Cover";
+      thumb.appendChild(img);
+    } else {
+      thumb.innerHTML = '<span class="gen-thumb-placeholder">♫</span>';
+    }
+
+    const info = document.createElement("div");
+    info.className = "gen-info";
+
+    const title = document.createElement("div");
+    title.className = "gen-title";
+    title.textContent = gen.title || "Untitled Track";
+
+    const meta = document.createElement("div");
+    meta.className = "gen-meta";
+    const parts = [];
+    if (gen.mood) parts.push(gen.mood);
+    if (gen.activity) parts.push(gen.activity);
+    if (gen.status && gen.status !== "succeeded") parts.push(gen.status);
+    meta.textContent = parts.join(" · ") || "—";
+
+    info.appendChild(title);
+    info.appendChild(meta);
+
+    item.appendChild(thumb);
+    item.appendChild(info);
+
+    if (gen.is_favourite) {
+      const heart = document.createElement("div");
+      heart.className = "gen-fav-heart";
+      heart.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>';
+      item.appendChild(heart);
+    }
+
+    if (gen.status === "succeeded") {
+      item.style.cursor = "pointer";
+      item.addEventListener("click", () => {
+        renderResultFromGen(gen);
+        switchScreen("screenResult");
+      });
+    }
+
+    listEl.appendChild(item);
+  }
+
+  async function loadRecentGenerations(opts = {}) {
+    const reset = opts.reset !== false;
     const listEl = $("genList");
     const emptyEl = $("genEmpty");
+    const loadMoreEl = $("genLoadMoreBtn");
     if (!listEl) return;
 
-    listEl.innerHTML = "";
+    if (gRecentIsLoading) return;
+
+    if (reset) {
+      gRecentPageOffset = 0;
+      gRecentHasMore = true;
+      listEl.innerHTML = "";
+      hide(emptyEl);
+    }
+
+    if (!gRecentHasMore) {
+      hide(loadMoreEl);
+      return;
+    }
+
+    gRecentIsLoading = true;
+    if (loadMoreEl) {
+      loadMoreEl.disabled = true;
+      loadMoreEl.textContent = "Loading...";
+    }
 
     try {
-      const resp = await fetch("/api/generations");
+      const resp = await fetch(`/api/generations?limit=${gRecentPageLimit}&offset=${gRecentPageOffset}`);
       const data = await resp.json();
 
       if (data.ok && data.generations && data.generations.length > 0) {
         hide(emptyEl);
-        data.generations.forEach((gen) => {
-          const item = document.createElement("div");
-          item.className = "gen-list-item";
-          item.dataset.genId = gen.id;
+        data.generations.forEach((gen) => renderGenerationListItem(gen, listEl));
 
-          const thumb = document.createElement("div");
-          thumb.className = "gen-thumb";
-          if (gen.cover_url) {
-            const img = document.createElement("img");
-            img.src = gen.cover_url;
-            img.alt = gen.title || "Cover";
-            thumb.appendChild(img);
-          } else {
-            thumb.innerHTML = '<span class="gen-thumb-placeholder">\u266B</span>';
-          }
+        const returned = Number(data.pagination?.returned ?? data.generations.length);
+        gRecentPageOffset += returned;
+        gRecentHasMore = returned >= gRecentPageLimit;
 
-          const info = document.createElement("div");
-          info.className = "gen-info";
-
-          const title = document.createElement("div");
-          title.className = "gen-title";
-          title.textContent = gen.title || "Untitled Track";
-
-          const meta = document.createElement("div");
-          meta.className = "gen-meta";
-          const parts = [];
-          if (gen.mood) parts.push(gen.mood);
-          if (gen.activity) parts.push(gen.activity);
-          if (gen.status && gen.status !== "succeeded") parts.push(gen.status);
-          meta.textContent = parts.join(" \u00B7 ") || "\u2014";
-
-          info.appendChild(title);
-          info.appendChild(meta);
-
-          item.appendChild(thumb);
-          item.appendChild(info);
-
-          // Heart indicator for favourited items
-          if (gen.is_favourite) {
-            const heart = document.createElement("div");
-            heart.className = "gen-fav-heart";
-            heart.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>';
-            item.appendChild(heart);
-          }
-
-          // Click to open full result
-          if (gen.status === "succeeded") {
-            item.style.cursor = "pointer";
-            item.addEventListener("click", () => {
-              renderResultFromGen(gen);
-              switchScreen("screenResult");
-            });
-          }
-
-          listEl.appendChild(item);
-        });
+        if (gRecentHasMore) show(loadMoreEl);
+        else hide(loadMoreEl);
       } else {
-        show(emptyEl);
+        if (gRecentPageOffset === 0) show(emptyEl);
+        gRecentHasMore = false;
+        hide(loadMoreEl);
       }
     } catch (e) {
       console.error("Load generations error:", e);
-      show(emptyEl);
+      if (gRecentPageOffset === 0) show(emptyEl);
+      gRecentHasMore = false;
+      hide(loadMoreEl);
+    } finally {
+      gRecentIsLoading = false;
+      if (loadMoreEl) {
+        loadMoreEl.disabled = false;
+        loadMoreEl.textContent = "Load more";
+      }
     }
   }
 
@@ -2526,6 +2567,13 @@
         handleDropdownAction(item.dataset.action);
       });
     });
+
+    const genLoadMoreBtn = $("genLoadMoreBtn");
+    if (genLoadMoreBtn) {
+      genLoadMoreBtn.addEventListener("click", () => {
+        loadRecentGenerations({ reset: false });
+      });
+    }
 
     // ── Login screen Google handler ──
     const loginGoogle = $("loginGoogle");

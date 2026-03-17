@@ -2550,6 +2550,14 @@ a { text-decoration: none; color: inherit; }
   line-height: 1.5;
 }
 
+.home-load-more {
+  height: 42px;
+  border-radius: 14px;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 
 /* ==========================================================
    Email Auth Form (Login Screen)

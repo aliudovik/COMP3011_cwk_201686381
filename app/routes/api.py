@@ -744,11 +744,25 @@ def list_generations():
     if not user_id:
         return jsonify({"ok": False, "error": "Not logged in"}), 401
 
+    limit_raw = request.args.get("limit", "20")
+    offset_raw = request.args.get("offset", "0")
+    try:
+        limit = int(limit_raw)
+        offset = int(offset_raw)
+    except (TypeError, ValueError):
+        return _json_error("limit and offset must be integers", 400, "validation_error")
+
+    if limit < 1 or limit > 50:
+        return _json_error("limit must be between 1 and 50", 400, "validation_error")
+    if offset < 0:
+        return _json_error("offset must be zero or greater", 400, "validation_error")
+
     gens = (
         Generation.query
         .filter_by(user_id=user_id)
         .order_by(Generation.created_at.desc())
-        .limit(50)
+        .offset(offset)
+        .limit(limit)
         .all()
     )
 
@@ -785,7 +799,16 @@ def list_generations():
 
         items.append(item)
 
-    return jsonify({"ok": True, "generations": items})
+    return _json_ok(
+        {
+            "generations": items,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "returned": len(items),
+            },
+        }
+    )
 
 
 # ---------------------------------------------------------------------
