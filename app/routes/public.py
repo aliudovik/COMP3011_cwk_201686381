@@ -3,6 +3,8 @@ from __future__ import annotations
 import random
 import time
 import uuid
+import hmac
+import re
 
 from flask import Blueprint, current_app, jsonify, render_template, request, redirect, session, url_for
 
@@ -16,6 +18,7 @@ public_bp = Blueprint("public", __name__)
 demo_bp = Blueprint("demo", __name__, url_prefix="/demo")
 
 DEMO_NAME = "Demo User"
+SHARE_TOKEN_RE = re.compile(r"^[a-f0-9]{32}$")
 
 GENRE_LIST = [
     "Pop", "Hip-Hop", "R&B", "Rock", "Indie",
@@ -129,6 +132,24 @@ def _get_vocal_focus_descriptor(profile: dict, listener_type: str) -> str:
     if len(listener_type or "") >= 2 and listener_type[1] == "I":
         return "Minimal"
     return "Textured"
+
+
+def _normalize_share_token(value) -> str:
+    token = str(value or "").strip().lower()
+    if not SHARE_TOKEN_RE.fullmatch(token):
+        return ""
+    return token
+
+
+def _as_text_list(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            out.append(text)
+    return out
 
 
 @public_bp.get("/")
@@ -247,15 +268,29 @@ def public_vibe_share(profile_id: int, token: str):
     if not lp:
         return redirect(url_for("public.public_home"))
 
-    profile = lp.profile_json or {}
-    saved_token = str(profile.get("share_token") or "").strip()
-    if not saved_token or saved_token != str(token or "").strip():
+    profile = lp.profile_json if isinstance(lp.profile_json, dict) else {}
+    incoming_token = _normalize_share_token(token)
+    saved_token = _normalize_share_token(profile.get("share_token"))
+    if not saved_token or not incoming_token or not hmac.compare_digest(saved_token, incoming_token):
         return redirect(url_for("public.public_home"))
 
-    explain = lp.explain_json or {}
-    diagnosis = explain.get("diagnosis") or {}
+    explain = lp.explain_json if isinstance(lp.explain_json, dict) else {}
+    diagnosis = explain.get("diagnosis") if isinstance(explain.get("diagnosis"), dict) else {}
     listener_type = _normalize_listener_type(profile, diagnosis)
     type_meta = get_type_meta(listener_type)
+
+    dominant_genres = _as_text_list(profile.get("dominant_genres"))
+    subgenres = _as_text_list(profile.get("subgenres"))
+    identity_artists = _as_text_list(profile.get("identity_artists"))
+    suggested_artists = _as_text_list(profile.get("suggested_artists"))
+    profile_view = {
+        **profile,
+        "dominant_genres": dominant_genres,
+        "subgenres": subgenres,
+        "identity_artists": identity_artists,
+        "suggested_artists": suggested_artists,
+    }
+
     stats = [
         {"label": "Emotional Depth", "value": _pct((profile.get("emotional_profile") or {}).get("emotional_depth"), 0.5)},
         {"label": "Curiosity", "value": _pct(profile.get("discovery_drive"), 0.5)},
@@ -266,7 +301,7 @@ def public_vibe_share(profile_id: int, token: str):
 
     return render_template(
         "vibe_share.html",
-        profile=profile,
+        profile=profile_view,
         diagnosis=diagnosis,
         listener_type=listener_type,
         type_meta=type_meta,

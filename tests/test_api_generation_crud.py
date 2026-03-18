@@ -485,6 +485,42 @@ class GenerationCrudApiTests(unittest.TestCase):
         read_deleted_json = read_deleted.get_json()
         self.assertEqual(read_deleted_json["error"]["code"], "generation_deleted")
 
+    def test_public_vibe_share_rejects_invalid_or_mismatched_tokens(self):
+        with self.app.app_context():
+            lp = ListenerProfile.query.get(self.listener_profile_id)
+            profile_json = dict(lp.profile_json or {})
+            profile_json["share_token"] = "a" * 32
+            lp.profile_json = profile_json
+            db.session.commit()
+
+        invalid_format = self.client.get(f"/vibe/{self.listener_profile_id}/not-a-valid-token")
+        self.assertEqual(invalid_format.status_code, 302)
+
+        mismatched = self.client.get(f"/vibe/{self.listener_profile_id}/{'b' * 32}")
+        self.assertEqual(mismatched.status_code, 302)
+
+    def test_public_vibe_share_renders_with_fallback_payload_shapes(self):
+        with self.app.app_context():
+            lp = ListenerProfile.query.get(self.listener_profile_id)
+            lp.profile_json = {
+                "share_token": "c" * 32,
+                "listener_persona": {"listener_mbti_like": "FVPD"},
+                "dominant_genres": "not-a-list",
+                "subgenres": ["", " synthwave "],
+                "identity_artists": ["  Artist A  ", None],
+                "suggested_artists": ["Artist B"],
+            }
+            lp.explain_json = "unexpected"
+            db.session.commit()
+
+        res = self.client.get(f"/vibe/{self.listener_profile_id}/{'c' * 32}")
+        self.assertEqual(res.status_code, 200)
+        html = res.get_data(as_text=True)
+        self.assertIn("Shared drVibey Profile", html)
+        self.assertIn("Artist A", html)
+        self.assertIn("Artist B", html)
+        self.assertIn("synthwave", html)
+
 
 if __name__ == "__main__":
     unittest.main()
