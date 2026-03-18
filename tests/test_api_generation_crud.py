@@ -521,6 +521,51 @@ class GenerationCrudApiTests(unittest.TestCase):
         self.assertIn("Artist B", html)
         self.assertIn("synthwave", html)
 
+    def test_generation_restore_flow(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            create_res = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "focus", "activity": "studying"},
+            )
+        generation_id = create_res.get_json()["generation_id"]
+
+        delete_res = self.client.delete(f"/api/generation/{generation_id}")
+        self.assertEqual(delete_res.status_code, 200)
+
+        restore_res = self.client.post(f"/api/generation/{generation_id}/restore")
+        self.assertEqual(restore_res.status_code, 200)
+        restore_json = restore_res.get_json()
+        self.assertTrue(restore_json["ok"])
+        self.assertTrue(restore_json["restored"])
+        self.assertEqual(restore_json["generation"]["status"], "queued")
+        self.assertIsNone(restore_json["generation"]["deleted_at"])
+
+        read_res = self.client.get(f"/api/generation/{generation_id}")
+        self.assertEqual(read_res.status_code, 200)
+        read_json = read_res.get_json()
+        self.assertEqual(read_json["status"], "queued")
+
+    def test_generation_restore_requires_deleted_state(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            create_res = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "focus", "activity": "studying"},
+            )
+        generation_id = create_res.get_json()["generation_id"]
+
+        restore_not_deleted = self.client.post(f"/api/generation/{generation_id}/restore")
+        self.assertEqual(restore_not_deleted.status_code, 409)
+        restore_not_deleted_json = restore_not_deleted.get_json()
+        self.assertEqual(restore_not_deleted_json["error"]["code"], "generation_not_deleted")
+
+        with self.client.session_transaction() as sess:
+            sess.pop("user_id", None)
+
+        restore_unauthorized = self.client.post(f"/api/generation/{generation_id}/restore")
+        self.assertEqual(restore_unauthorized.status_code, 401)
+        restore_unauthorized_json = restore_unauthorized.get_json()
+        self.assertEqual(restore_unauthorized_json["error"]["code"], "unauthorized")
+
 
 if __name__ == "__main__":
     unittest.main()

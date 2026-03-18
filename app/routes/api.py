@@ -530,6 +530,30 @@ def delete_generation(generation_id: int):
     )
 
 
+@api_bp.post("/generation/<int:generation_id>/restore")
+def restore_generation(generation_id: int):
+    user_id = _require_session_user_id()
+    if not user_id:
+        return _json_error("Not logged in", 401, "unauthorized")
+
+    gen = Generation.query.filter_by(id=generation_id, user_id=user_id).first()
+    if not gen:
+        return _json_error("Generation not found", 404, "not_found")
+    if not gen.deleted_at:
+        return _json_error("Generation is not deleted", 409, "generation_not_deleted")
+
+    gen.deleted_at = None
+    gen.status = "queued"
+    db.session.commit()
+
+    return _json_ok(
+        {
+            "generation": _generation_summary(gen),
+            "restored": True,
+        }
+    )
+
+
 # =====================================================================
 # drVibey Chat Endpoints
 # =====================================================================

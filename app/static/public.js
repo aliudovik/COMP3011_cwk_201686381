@@ -761,6 +761,24 @@
   }
 
   // ── Home screen (recent generations) ───────────────────────────────
+  async function restoreGenerationById(genId) {
+    try {
+      const resp = await fetch(`/api/generation/${genId}/restore`, {
+        method: "POST",
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        const base = data?.error?.message || "Could not restore generation right now.";
+        alert(withRequestIdMessage(base, data));
+        return;
+      }
+      loadRecentGenerations({ reset: true });
+    } catch (e) {
+      console.error("Restore generation error:", e);
+      alert("Could not restore generation right now.");
+    }
+  }
+
   function renderGenerationListItem(gen, listEl) {
     const item = document.createElement("div");
     item.className = "gen-list-item";
@@ -821,6 +839,17 @@
         renderResultFromGen(gen);
         switchScreen("screenResult");
       });
+    } else if (gen.status === "deleted") {
+      const restoreBtn = document.createElement("button");
+      restoreBtn.type = "button";
+      restoreBtn.className = "gen-restore-btn";
+      restoreBtn.textContent = "Restore";
+      restoreBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        restoreGenerationById(gen.id);
+      });
+      item.appendChild(restoreBtn);
     }
 
     listEl.appendChild(item);
