@@ -794,14 +794,19 @@
     const parts = [];
     if (gen.mood) parts.push(gen.mood);
     if (gen.activity) parts.push(gen.activity);
-    if (gen.status && gen.status !== "succeeded") parts.push(gen.status);
     meta.textContent = parts.join(" · ") || "—";
 
     info.appendChild(title);
     info.appendChild(meta);
 
+    const statusBadge = document.createElement("div");
+    const status = String(gen.status || "unknown").toLowerCase();
+    statusBadge.className = `gen-status-badge status-${status}`;
+    statusBadge.textContent = status;
+
     item.appendChild(thumb);
     item.appendChild(info);
+    item.appendChild(statusBadge);
 
     if (gen.is_favourite) {
       const heart = document.createElement("div");

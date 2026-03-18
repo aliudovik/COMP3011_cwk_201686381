@@ -2620,6 +2620,37 @@ a { text-decoration: none; color: inherit; }
   text-overflow: ellipsis;
 }
 
+.gen-status-badge {
+  flex-shrink: 0;
+  min-width: 64px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 2px solid #111;
+  border-radius: 999px;
+  padding: 4px 8px;
+  line-height: 1;
+}
+
+.gen-status-badge.status-succeeded {
+  background: #eaf9ed;
+  color: #1f6f35;
+}
+
+.gen-status-badge.status-running,
+.gen-status-badge.status-queued {
+  background: #eef5ff;
+  color: #1f4d8a;
+}
+
+.gen-status-badge.status-failed,
+.gen-status-badge.status-deleted {
+  background: #fff0f0;
+  color: #8a1f1f;
+}
+
 .gen-empty {
   text-align: center;
   color: #999;

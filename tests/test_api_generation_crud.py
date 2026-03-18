@@ -413,6 +413,78 @@ class GenerationCrudApiTests(unittest.TestCase):
         missing_json = missing.get_json()
         self.assertEqual(missing_json["error"]["code"], "not_found")
 
+    def test_generation_status_transition_success(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            create_res = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "focus", "activity": "studying"},
+            )
+        generation_id = create_res.get_json()["generation_id"]
+
+        to_running = self.client.patch(
+            f"/api/generation/{generation_id}/status",
+            json={"status": "running"},
+        )
+        self.assertEqual(to_running.status_code, 200)
+        to_running_json = to_running.get_json()
+        self.assertEqual(to_running_json["status_transition"]["from"], "queued")
+        self.assertEqual(to_running_json["status_transition"]["to"], "running")
+
+        to_succeeded = self.client.patch(
+            f"/api/generation/{generation_id}/status",
+            json={"status": "succeeded"},
+        )
+        self.assertEqual(to_succeeded.status_code, 200)
+        to_succeeded_json = to_succeeded.get_json()
+        self.assertEqual(to_succeeded_json["status_transition"]["from"], "running")
+        self.assertEqual(to_succeeded_json["status_transition"]["to"], "succeeded")
+
+    def test_generation_status_transition_validation(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            create_res = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "focus", "activity": "studying"},
+            )
+        generation_id = create_res.get_json()["generation_id"]
+
+        invalid_status = self.client.patch(
+            f"/api/generation/{generation_id}/status",
+            json={"status": "done"},
+        )
+        self.assertEqual(invalid_status.status_code, 400)
+        invalid_status_json = invalid_status.get_json()
+        self.assertEqual(invalid_status_json["error"]["code"], "validation_error")
+
+        invalid_transition = self.client.patch(
+            f"/api/generation/{generation_id}/status",
+            json={"status": "succeeded"},
+        )
+        self.assertEqual(invalid_transition.status_code, 409)
+        invalid_transition_json = invalid_transition.get_json()
+        self.assertEqual(invalid_transition_json["error"]["code"], "transition_not_allowed")
+
+    def test_generation_status_transition_to_deleted_soft_deletes(self):
+        with patch("app.routes.api.enqueue", return_value=DummyJob()):
+            create_res = self.client.post(
+                "/api/generate",
+                json={"user_id": self.user_id, "mood": "focus", "activity": "studying"},
+            )
+        generation_id = create_res.get_json()["generation_id"]
+
+        to_deleted = self.client.patch(
+            f"/api/generation/{generation_id}/status",
+            json={"status": "deleted"},
+        )
+        self.assertEqual(to_deleted.status_code, 200)
+        to_deleted_json = to_deleted.get_json()
+        self.assertEqual(to_deleted_json["generation"]["status"], "deleted")
+        self.assertIsNotNone(to_deleted_json["generation"]["deleted_at"])
+
+        read_deleted = self.client.get(f"/api/generation/{generation_id}")
+        self.assertEqual(read_deleted.status_code, 410)
+        read_deleted_json = read_deleted.get_json()
+        self.assertEqual(read_deleted_json["error"]["code"], "generation_deleted")
+
 
 if __name__ == "__main__":
     unittest.main()

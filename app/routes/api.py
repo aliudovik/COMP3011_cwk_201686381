@@ -1021,6 +1021,69 @@ def set_like_status(generation_id: int):
     return _json_ok({"like_status": gen.like_status})
 
 
+@api_bp.patch("/generation/<int:generation_id>/status")
+def set_generation_status(generation_id: int):
+    user_id = _require_session_user_id()
+    if not user_id:
+        return _json_error("Not logged in", 401, "unauthorized")
+
+    gen = Generation.query.filter_by(id=generation_id, user_id=user_id).first()
+    if not gen:
+        return _json_error("Generation not found", 404, "not_found")
+    if gen.deleted_at:
+        return _json_error("Generation was deleted", 410, "generation_deleted")
+
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or not body:
+        return _json_error("Request body must be a non-empty JSON object", 400, "validation_error")
+
+    next_status = str(body.get("status") or "").strip().lower()
+    allowed_statuses = {"queued", "running", "succeeded", "failed", "deleted"}
+    if next_status not in allowed_statuses:
+        return _json_error(
+            "status must be one of queued, running, succeeded, failed, deleted",
+            400,
+            "validation_error",
+        )
+
+    current_status = str(gen.status or "queued").strip().lower() or "queued"
+    if current_status == next_status:
+        return _json_error("status is already set to the requested value", 400, "validation_error")
+
+    allowed_transitions = {
+        "queued": {"running", "failed", "deleted"},
+        "running": {"succeeded", "failed", "deleted"},
+        "failed": {"queued", "deleted"},
+        "succeeded": {"deleted"},
+        "deleted": set(),
+    }
+
+    if next_status not in allowed_transitions.get(current_status, set()):
+        return _json_error(
+            f"Invalid status transition from {current_status} to {next_status}",
+            409,
+            "transition_not_allowed",
+        )
+
+    gen.status = next_status
+    if next_status == "deleted":
+        gen.deleted_at = datetime.now(timezone.utc)
+        gen.is_favourite = False
+        gen.like_status = None
+
+    db.session.commit()
+    return _json_ok(
+        {
+            "generation": _generation_summary(gen),
+            "status_transition": {
+                "from": current_status,
+                "to": next_status,
+                "applied": True,
+            },
+        }
+    )
+
+
 @api_bp.get("/analytics/generations/summary")
 def generation_analytics_summary():
     user_id = _require_session_user_id()
